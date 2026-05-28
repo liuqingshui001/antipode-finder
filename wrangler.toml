@@ -1,0 +1,10 @@
+name = "antipode-finder"
+main = "_worker.js"
+compatibility_date = "2024-12-18"
+
+# Workers + Static Assets
+[site]
+bucket = "./"
+entry-point = "_worker.js"
+
+# Pages deployment: just use `wrangler pages deploy ./`

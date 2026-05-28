@@ -1,0 +1,6 @@
+# Cloudflare Pages redirects
+# API proxy routes
+/api/nominatim/*  https://nominatim.openstreetmap.org/:splat  200
+/api/wikipedia/*  https://en.wikipedia.org/:splat              200
+/api/baike/*      https://baike.baidu.com/:splat                200
+/api/bing/*       https://cn.bing.com/:splat                    200
