@@ -1092,46 +1092,21 @@
             } catch { return []; }
         }
 
-        /** Fetch Bing News search results */
-        async function fetchBingNews(name, useCN) {
-            const base = useCN ? 'https://cn.bing.com' : 'https://www.bing.com';
-            const rssUrl = `${base}/news/search?q=${encodeURIComponent(name)}&format=rss`;
-            const htmlUrl = `${base}/news/search?q=${encodeURIComponent(name)}`;
-            // Try RSS-based news first (structured data)
+        /** Fetch related Wikipedia articles as "news" */
+        async function fetchWikiNews(name, useCN) {
+            const domain = useCN ? 'zh.wikipedia.org' : 'en.wikipedia.org';
+            const url = `https://${domain}/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(name)}&srlimit=6&format=json&origin=*`;
             try {
-                const resp = await fetchWithCORS(rssUrl, { headers:{'User-Agent':'Mozilla/5.0'} });
-                if (resp.ok) {
-                    const xml = await resp.text();
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(xml, 'text/xml');
-                    const items = [];
-                    doc.querySelectorAll('item').forEach(el => {
-                        const title = el.querySelector('title')?.textContent || '';
-                        const link = el.querySelector('link')?.textContent || '';
-                        const desc = el.querySelector('description')?.textContent || '';
-                        const date = el.querySelector('pubDate')?.textContent || '';
-                        if (title) items.push({ title, snippet: desc.replace(/<[^>]+>/g, '').substring(0, 120), url: link, date });
-                    });
-                    if (items.length > 0) return items.slice(0, 6);
-                }
-            } catch { /* fall through to HTML parse */ }
-
-            // Fallback: parse HTML news page
-            try {
-                const resp = await fetchWithCORS(htmlUrl, { headers:{'User-Agent':'Mozilla/5.0'} });
+                const resp = await fetchWithCORS(url, { headers:{'User-Agent':'AntipodeFinder/1.0'} });
                 if (!resp.ok) return [];
-                const html = await resp.text();
-                const p = new DOMParser();
-                const doc = p.parseFromString(html, 'text/html');
-                const items = [];
-                doc.querySelectorAll('.news-card, .newsitem, .card').forEach(el => {
-                    const a = el.querySelector('a[href]');
-                    const title = a ? a.textContent.trim() : '';
-                    const link = a ? a.getAttribute('href') || '' : '';
-                    const snippet = el.querySelector('.snippet, .abstract')?.textContent?.trim() || '';
-                    if (title) items.push({ title, snippet: snippet.substring(0, 120), url: link, date: '' });
-                });
-                return items.slice(0, 6);
+                const data = await resp.json();
+                const results = data.query && data.query.search ? data.query.search : [];
+                return results.map(r => ({
+                    title: r.title,
+                    snippet: r.snippet.replace(/<[^>]+>/g, '').substring(0, 120),
+                    url: `https://${domain}/wiki/${encodeURIComponent(r.title)}`,
+                    date: r.timestamp ? new Date(r.timestamp).toLocaleDateString() : '',
+                }));
             } catch { return []; }
         }
 
@@ -1213,21 +1188,21 @@
                 });
             }
 
-            // Load news from Bing using the most specific name
+            // Load related articles from Wikipedia
             let items = [];
             if (isChineseUser) {
-                items = await fetchBingNews(bestName, true);
-                if (items.length === 0) items = await fetchBingNews(bestName, false);
+                items = await fetchWikiNews(bestName, true);
+                if (items.length === 0) items = await fetchWikiNews(bestName, false);
             } else {
-                items = await fetchBingNews(bestName, false);
-                if (items.length === 0) items = await fetchBingNews(bestName, true);
+                items = await fetchWikiNews(bestName, false);
+                if (items.length === 0) items = await fetchWikiNews(bestName, true);
             }
 
             if (items.length > 0) {
                 tabNews.innerHTML = items.map(item => `
                     <div class="news-item">
                         <a href="${item.url}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>
-                        <div class="news-meta">${escapeHtml(item.snippet || item.date || '必应新闻')}</div>
+                        <div class="news-meta">${escapeHtml(item.snippet || item.date || 'Wikipedia')}</div>
                     </div>
                 `).join('');
             } else {
