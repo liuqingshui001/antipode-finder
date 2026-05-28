@@ -26,13 +26,14 @@ And so this project was born. Enter any location, find its antipode — the poin
 
 ## ✨ 功能 · Features
 
-- **🌍 3D 地球动画** — 搜索时地球旋转到对应位置，仪式感动画过渡 / 3D globe animation with cinematic transitions
-- **🗺️ 双点地图** — 起点与对跖点同时展示 / Both origin and antipode shown on the map
-- **📖 百科** — 自动显示对跖点的维基百科/必应知识卡片 / Auto-fetch Wikipedia/Bing knowledge card
-- **🖼️ 图片** — 多图展示风景、建筑、人物等 / Multiple images: landscapes, architecture, people
-- **📰 新闻** — 必应新闻搜索相关资讯 / Bing News for latest articles
-- **📍 我的位置** — 一键定位当前位置 / One-click geolocation
-- **🎯 实时预览** — 输入时地球实时旋转到对应位置 / Real-time globe rotation while typing
+- **🌍 3D 地球动画** — 仪式感动画过渡到对跖点 / 3D globe animation
+- **🗺️ 双点地图** — 起点与对跖点同时展示 / Both origin and antipode on map
+- **📖 百科** — Wikipedia + Bing 知识卡片 / Wikipedia + Bing knowledge card
+- **🖼️ 图片** — 多图展示风景、建筑、人物 / Multiple images (landscapes, people, streets)
+- **📰 新闻** — Bing 新闻 + Wikipedia 文章 / Bing News + Wikipedia articles
+- **🌐 中英双语** — 右上角一键切换 / Chinese/English toggle
+- **📍 我的位置** — 一键定位 / One-click geolocation
+- **🖥️ 桌面应用** — Electron 打包的独立客户端 / Standalone desktop app
 
 ---
 
@@ -43,63 +44,61 @@ And so this project was born. Enter any location, find its antipode — the poin
 ```bash
 cd antipode
 node server.js
-# 浏览器访问 / Open browser: http://localhost:3000
+# 浏览器访问 / Open: http://localhost:3000
+```
+
+### 桌面应用 · Desktop App
+
+下载最新 Release 中的 `Antipode.Finder-win-x64.zip`，解压后双击 `The Other Side of the Earth.exe` 即可运行。
+
+从源码构建：
+```bash
+cd antipode
+npm install
+npx electron-builder --dir
+# 输出在 / Antipode 输出在 release/win-unpacked/
+# 输出在 / Output: release/win-unpacked/
 ```
 
 ### 部署到 Cloudflare · Deploy to Cloudflare
 
-**最简单方式 — 复制粘贴 · Easiest — Copy & Paste:**
+**最简单方式 / Easiest：**
 
-`_worker.js` 是**完全自包含**的，打开文件全选复制全部内容，然后：
+`_worker.js` 是**完全自包含**的，打开全选复制全部内容，去 [Cloudflare Dashboard](https://dash.cloudflare.com) → Workers → 新建 → 粘贴 → 部署。约 92KB，无需任何配置。
 
-1. 打开 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages**
-2. 点击 **创建应用程序** → **Worker**
-3. 删掉默认代码，粘贴 `_worker.js` 全文
-4. 点击 **部署**，立即生效
-
-无需任何配置，Worker 自身包含完整的 HTML + API 代理（约 92KB，远低于 1MB 限制）。
-
-**Wrangler CLI 部署 · Wrangler CLI deploy:**
-
+**Wrangler CLI:**
 ```bash
 cd antipode
 npx wrangler login
 npx wrangler deploy
 ```
 
-**Pages 部署 · Pages deploy:**
-
+**Pages:**
 ```bash
-cd antipode
 npx wrangler pages deploy ./
 ```
-或者通过 Cloudflare Dashboard 连接 Git 仓库部署。
 
 ---
 
 ## 🏗️ 架构 · Architecture
 
-| 部署方式 / Mode | 静态文件 / Static | API 代理 / API Proxy |
-|----------------|-------------------|---------------------|
-| 本地 `node server.js` | `index.html` | corsproxy.io |
-| Cloudflare Workers | `_worker.js` 内建 | Worker 内建 `/api/proxy` |
-| Cloudflare Pages | CDN 托管 | `_worker.js` via Pages Functions |
-
-部署到 Cloudflare 后，所有 API 请求通过 Worker 内建代理，无需 corsproxy.io：
-
-*When deployed on Cloudflare, all API requests go through the Worker's built-in proxy:*
-- `/api/proxy?url=https://nominatim.openstreetmap.org/...`
-- `/api/proxy?url=https://en.wikipedia.org/w/api.php?...`
+| 部署方式 / Mode | 前端 / Frontend | API 代理 / Proxy |
+|----------------|----------------|-----------------|
+| 本地 `node server.js` | `index.html` | corsproxy.io (多级回退) |
+| Electron 桌面应用 | 内建 HTTP 服务器 | corsproxy.io |
+| Cloudflare Workers | `_worker.js` 内嵌 | Worker 内建 `/api/proxy` |
+| Cloudflare Pages | CDN 托管 | `_worker.js` Pages Functions |
 
 ### 数据源 / Data Sources
 
-| 模块 / Module | 主源 / Primary | 备用 / Fallback |
+| 模块 / Module | 主源 / Primary | 回退 / Fallback |
 |---------------|---------------|-----------------|
 | 📖 百科 | Wikipedia API | Bing 知识卡片 |
-| 🖼️ 图片 | Wikipedia pageimages + Commons | Bing 图片搜索 |
-| 📰 新闻 | Bing News RSS | — |
+| 🖼️ 图片 | Wikipedia + Commons | Bing 图片搜索 |
+| 📰 新闻 | Bing News RSS → HTML | Wikipedia 搜索 |
 | 🗺️ 地图 | OpenStreetMap → Esri → CartoDB | 自动回退 |
-| 🌐 地理编码 | Nominatim API | corsproxy.io |
+| 🌐 地理编码 | Nominatim API | — |
+| 🔄 图片代理 | — | corsproxy.io (国内访问) |
 
 ---
 
@@ -107,12 +106,14 @@ npx wrangler pages deploy ./
 
 ```
 antipode/
-├── index.html        # 主应用（HTML + CSS + JS）/ Main application
-├── server.js         # Node.js 本地开发服务器 / Local dev server
-├── _worker.js        # Cloudflare Workers / Pages Functions
-├── wrangler.toml     # Workers 配置 / Workers config
-├── _headers          # Pages 安全头 / Pages security headers
-├── _redirects        # Pages URL 重定向 / Pages redirects
+├── index.html        # 主应用 / Main application
+├── server.js         # Node.js 本地服务器 / Local dev server
+├── _worker.js        # Cloudflare Workers (自包含 / self-contained)
+├── electron.js       # Electron 主进程 / Electron main process
+├── package.json      # Electron 打包配置 / Electron build config
+├── wrangler.toml     # Cloudflare 配置
+├── _headers          # Pages 安全头
+├── _redirects        # Pages URL 重定向
 └── README.md         # 说明文档 / This file
 ```
 
