@@ -1860,6 +1860,7 @@ const corsHeaders = {
     'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': '*',
 };
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -1878,10 +1879,11 @@ async function handleAPI(path, url, request) {
 }
 async function doProxy(target, request) {
     try {
-        const h = new Headers(request.headers);
-        ['cf-connecting-ip','x-forwarded-for','x-real-ip'].forEach(k => h.delete(k));
-        h.set('User-Agent', 'AntipodeFinder/1.0 (Cloudflare Worker)');
-        const r = await fetch(target, { method: request.method, headers: h });
+        const h = new Headers();
+        h.set('User-Agent', UA);
+        h.set('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+        h.set('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8');
+        const r = await fetch(target, { method: 'GET', headers: h, redirect: 'follow' });
         const rh = new Headers(r.headers);
         for (const [k, v] of Object.entries(corsHeaders)) rh.set(k, v);
         return new Response(r.body, { status: r.status, statusText: r.statusText, headers: rh });
