@@ -1,0 +1,36 @@
+{
+  "name": "antipode-finder",
+  "version": "1.0.0",
+  "description": "The Other Side of the Earth - Antipode Finder",
+  "author": "liuqingshui001",
+  "main": "electron.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.antipode.finder",
+    "productName": "The Other Side of the Earth",
+    "files": [
+      "electron.js",
+      "index.html"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "portable"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.0"
+  }
+}

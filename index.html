@@ -1200,6 +1200,44 @@
             } catch { return []; }
         }
 
+        /** Fetch Bing News (RSS + HTML fallback) */
+        async function fetchBingNews(name, useCN) {
+            const base = useCN ? 'https://cn.bing.com' : 'https://www.bing.com';
+            const rssUrl = `${base}/news/search?q=${encodeURIComponent(name)}&format=rss`;
+            const htmlUrl = `${base}/news/search?q=${encodeURIComponent(name)}`;
+            try {
+                const resp = await fetchWithCORS(rssUrl, { headers:{'User-Agent':'Mozilla/5.0'} });
+                if (resp.ok) {
+                    const xml = await resp.text();
+                    const doc = new DOMParser().parseFromString(xml, 'text/xml');
+                    const items = [];
+                    doc.querySelectorAll('item').forEach(el => {
+                        const title = el.querySelector('title')?.textContent || '';
+                        const link = el.querySelector('link')?.textContent || '';
+                        const desc = el.querySelector('description')?.textContent || '';
+                        const date = el.querySelector('pubDate')?.textContent || '';
+                        if (title) items.push({ title, snippet: desc.replace(/<[^>]+>/g, '').substring(0, 120), url: link, date, source: 'Bing' });
+                    });
+                    if (items.length > 0) return items.slice(0, 6);
+                }
+            } catch { /* fall through */ }
+            try {
+                const resp = await fetchWithCORS(htmlUrl, { headers:{'User-Agent':'Mozilla/5.0'} });
+                if (!resp.ok) return [];
+                const html = await resp.text();
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                const items = [];
+                doc.querySelectorAll('.news-card, .newsitem, .t_nw').forEach(el => {
+                    const a = el.querySelector('a[href]');
+                    const title = a ? a.textContent.trim() : '';
+                    const link = a ? a.getAttribute('href') || '' : '';
+                    const snippet = el.querySelector('.snippet, .abstract, .d-snippet')?.textContent?.trim() || '';
+                    if (title) items.push({ title, snippet: snippet.substring(0, 120), url: link, date: '', source: 'Bing' });
+                });
+                return items.slice(0, 6);
+            } catch { return []; }
+        }
+
         /** Fetch related Wikipedia articles as "news" */
         async function fetchWikiNews(name, useCN) {
             const domain = useCN ? 'zh.wikipedia.org' : 'en.wikipedia.org';
@@ -1296,14 +1334,24 @@
                 });
             }
 
-            // Load related articles from Wikipedia
+            // Load news: Bing first, Wikipedia fallback (both source)
             let items = [];
             if (isChineseUser) {
-                items = await fetchWikiNews(bestName, true);
-                if (items.length === 0) items = await fetchWikiNews(bestName, false);
+                items = await fetchBingNews(bestName, true);
+                if (items.length === 0) items = await fetchBingNews(bestName, false);
             } else {
-                items = await fetchWikiNews(bestName, false);
-                if (items.length === 0) items = await fetchWikiNews(bestName, true);
+                items = await fetchBingNews(bestName, false);
+                if (items.length === 0) items = await fetchBingNews(bestName, true);
+            }
+            // If Bing failed, fall back to Wikipedia
+            if (items.length === 0) {
+                if (isChineseUser) {
+                    items = await fetchWikiNews(bestName, true);
+                    if (items.length === 0) items = await fetchWikiNews(bestName, false);
+                } else {
+                    items = await fetchWikiNews(bestName, false);
+                    if (items.length === 0) items = await fetchWikiNews(bestName, true);
+                }
             }
 
             if (items.length > 0) {
