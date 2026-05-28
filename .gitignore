@@ -1,1 +1,9 @@
-NODEBUG
+node_modules/
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db
+build.py
+build_final.py
+_worker_template.js

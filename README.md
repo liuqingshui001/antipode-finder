@@ -48,7 +48,18 @@ node server.js
 
 ### 部署到 Cloudflare · Deploy to Cloudflare
 
-**Workers 部署 / Workers deploy:**
+**最简单方式 — 复制粘贴 · Easiest — Copy & Paste:**
+
+`_worker.js` 是**完全自包含**的，打开文件全选复制全部内容，然后：
+
+1. 打开 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages**
+2. 点击 **创建应用程序** → **Worker**
+3. 删掉默认代码，粘贴 `_worker.js` 全文
+4. 点击 **部署**，立即生效
+
+无需任何配置，Worker 自身包含完整的 HTML + API 代理（约 92KB，远低于 1MB 限制）。
+
+**Wrangler CLI 部署 · Wrangler CLI deploy:**
 
 ```bash
 cd antipode
@@ -56,18 +67,13 @@ npx wrangler login
 npx wrangler deploy
 ```
 
-**Pages 部署 / Pages deploy:**
+**Pages 部署 · Pages deploy:**
 
 ```bash
 cd antipode
 npx wrangler pages deploy ./
 ```
-
-或者通过 Cloudflare Dashboard:
-1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. Pages → 创建项目 → 连接 Git 仓库
-3. 构建配置: 无 / Build: none
-4. 部署后自动生效
+或者通过 Cloudflare Dashboard 连接 Git 仓库部署。
 
 ---
 
