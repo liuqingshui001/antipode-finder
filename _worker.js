@@ -1,15 +1,1859 @@
-/**
- * Cloudflare Workers / Pages Functions — 地球的另一边 API Proxy
- *
- * 通用格式，同时支持:
- *   wrangler pages deploy ./   (Pages 部署)
- *   wrangler deploy             (Workers + Assets 部署)
- *
- * 功能:
- *   - /api/* → 代理到外部 API (Nominatim / Wikipedia / Bing / Baidu)
- *   - /api/proxy?url=XXX → 通用代理
- *   - 其他路径 → 由 Cloudflare assets 系统托管静态文件
- */
+const INDEX_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地球的另一边 · Antipode Finder</title>
+    <meta name="description" content="查询地球上任意地点正对面的位置——对跖点（Antipode）计算器">
+    <meta property="og:title" content="地球的另一边 · Antipode Finder">
+    <meta property="og:description" content="查询地球上任意地点正对面的位置">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌍</text></svg>">
+
+    <!-- Three.js importmap -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: #0a0e1a;
+            color: #e0e8f0;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* ===== Header ===== */
+        header {
+            background: linear-gradient(135deg, #0d1321 0%, #1a1a3e 50%, #0d1b2a 100%);
+            border-bottom: 1px solid rgba(100, 140, 255, 0.15);
+            padding: 18px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            position: relative;
+            z-index: 1000;
+        }
+        header::after {
+            content: '';
+            position: absolute;
+            bottom: 0; left: 10%; right: 10%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(100, 180, 255, 0.4), transparent);
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+        .logo-icon {
+            width: 40px; height: 40px;
+            background: linear-gradient(135deg, #4facfe, #00f2fe);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: 0 0 20px rgba(79, 172, 254, 0.3);
+        }
+        .logo span { background: linear-gradient(135deg, #4facfe, #a78bfa, #f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .subtitle { font-size: 13px; color: #8899bb; margin-left: 4px; letter-spacing: 0; }
+        .subtitle .highlight { color: #4facfe; -webkit-text-fill-color: #4facfe; }
+
+        /* ===== Search ===== */
+        .search-section {
+            background: linear-gradient(180deg, rgba(13, 19, 33, 0.8) 0%, rgba(10, 14, 26, 0.4) 100%);
+            padding: 20px 24px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .search-wrapper {
+            flex: 1;
+            min-width: 240px;
+            position: relative;
+        }
+        .search-wrapper input {
+            width: 100%;
+            padding: 12px 16px 12px 44px;
+            border-radius: 12px;
+            border: 1px solid rgba(100, 140, 255, 0.2);
+            background: rgba(255, 255, 255, 0.06);
+            color: #e0e8f0;
+            font-size: 15px;
+            outline: none;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(8px);
+        }
+        .search-wrapper input::placeholder { color: #556688; }
+        .search-wrapper input:focus {
+            border-color: rgba(79, 172, 254, 0.5);
+            background: rgba(255, 255, 255, 0.1);
+            box-shadow: 0 0 24px rgba(79, 172, 254, 0.1);
+        }
+        .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 18px; opacity: 0.5; pointer-events: none; }
+
+        .btn {
+            padding: 12px 22px;
+            border-radius: 12px;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #4facfe, #6366f1);
+            color: #fff;
+            box-shadow: 0 4px 16px rgba(79, 172, 254, 0.25);
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(79, 172, 254, 0.35); }
+        .btn-primary:active { transform: translateY(0); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .btn-locate {
+            background: linear-gradient(135deg, #34d399, #22d3ee);
+            color: #0a0e1a;
+            box-shadow: 0 4px 16px rgba(52, 211, 153, 0.2);
+        }
+        .btn-locate:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(52, 211, 153, 0.3); }
+        .btn-locate:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        /* ===== Main Content ===== */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* ===== Globe Container (overlays map) ===== */
+        #globe-container {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 10;
+            background: transparent;
+            pointer-events: none; /* pass clicks through to map below */
+            opacity: 1;
+            transition: opacity 1.2s ease-in-out;
+        }
+        #globe-container canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+        }
+        #globe-container.faded {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* ===== Map ===== */
+        #map {
+            flex: 1;
+            min-height: 300px;
+            z-index: 1;
+        }
+        #map.hidden { visibility: hidden; }
+        .leaflet-container { background: #0a1628 !important; }
+        .leaflet-control-zoom a {
+            background: rgba(20, 30, 60, 0.9) !important;
+            color: #c0d0e8 !important;
+            border-color: rgba(100, 140, 255, 0.2) !important;
+        }
+        .leaflet-control-attribution { background: rgba(10, 14, 26, 0.8) !important; color: #556688 !important; font-size: 11px !important; }
+        .leaflet-control-attribution a { color: #4facfe !important; }
+
+        /* Leaflet markers */
+        .marker-original, .marker-antipode {
+            width: 28px; height: 28px;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 3px solid #fff;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+        }
+        .marker-original { background: linear-gradient(135deg, #4facfe, #6366f1); }
+        .marker-antipode { background: linear-gradient(135deg, #f97316, #ef4444); }
+        .marker-original::after, .marker-antipode::after {
+            content: ''; width: 10px; height: 10px; border-radius: 50%;
+            background: #fff; transform: rotate(45deg);
+        }
+
+        /* ===== Info Panel ===== */
+        .info-panel {
+            background: linear-gradient(180deg, rgba(13, 19, 33, 0.95) 0%, rgba(10, 14, 26, 0.98) 100%);
+            border-top: 1px solid rgba(100, 140, 255, 0.12);
+            padding: 18px 24px 20px;
+            display: none;
+            gap: 16px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 2;
+        }
+        .info-panel.visible { display: flex; }
+        .info-panel::before {
+            content: '';
+            position: absolute; top: 0; left: 5%; right: 5%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(79, 172, 254, 0.3), transparent);
+        }
+        .info-card {
+            flex: 1; min-width: 220px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(100, 140, 255, 0.1);
+            border-radius: 14px; padding: 16px 18px;
+            transition: all 0.3s ease;
+        }
+        .info-card:hover { border-color: rgba(100, 140, 255, 0.25); }
+        .info-card.original-card { border-left: 3px solid #4facfe; }
+        .info-card.antipode-card { border-left: 3px solid #f97316; }
+
+        .info-card-header {
+            display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+        }
+        .info-card-header .badge {
+            font-size: 11px; padding: 2px 10px; border-radius: 20px;
+            font-weight: 600; letter-spacing: 0.5px;
+        }
+        .badge-original { background: rgba(79, 172, 254, 0.15); color: #4facfe; border: 1px solid rgba(79, 172, 254, 0.3); }
+        .badge-antipode { background: rgba(249, 115, 22, 0.15); color: #f97316; border: 1px solid rgba(249, 115, 22, 0.3); }
+        .info-card-title { font-size: 14px; font-weight: 500; color: #8899bb; }
+        .info-card-name { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+        .info-card-address { font-size: 13px; color: #8899bb; line-height: 1.5; margin-bottom: 8px; }
+        .info-card-coords {
+            font-size: 12px; color: #667799;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            background: rgba(0,0,0,0.3); padding: 4px 10px; border-radius: 6px; display: inline-block;
+        }
+        .antipode-connector {
+            display: flex; align-items: center; justify-content: center;
+            min-width: 40px; flex-shrink: 0;
+        }
+        .connector-line {
+            display: flex; flex-direction: column; align-items: center; gap: 4px;
+        }
+        .connector-line .distance {
+            font-size: 13px; font-weight: 600; color: #a78bfa;
+            background: rgba(167, 139, 250, 0.1);
+            border: 1px solid rgba(167, 139, 250, 0.2);
+            padding: 4px 12px; border-radius: 20px;
+        }
+        .connector-line .arrow { font-size: 18px; opacity: 0.5; }
+
+        /* ===== States ===== */
+        .empty-state {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center; z-index: 2;
+            pointer-events: none; width: 90%; max-width: 480px;
+        }
+        .empty-state .emoji { font-size: 56px; margin-bottom: 12px; display: block; }
+        .empty-state h2 {
+            font-size: 20px; font-weight: 600; margin-bottom: 8px;
+            background: linear-gradient(135deg, #4facfe, #a78bfa);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .empty-state p { font-size: 14px; color: #667799; line-height: 1.6; -webkit-text-fill-color: #667799; }
+        .empty-state .examples {
+            margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap;
+            justify-content: center; pointer-events: auto;
+        }
+        .empty-state .examples button {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(100,140,255,0.12);
+            color: #8899bb; padding: 6px 14px; border-radius: 20px;
+            font-size: 13px; cursor: pointer; transition: all 0.2s;
+        }
+        .empty-state .examples button:hover {
+            background: rgba(79,172,254,0.1); border-color: rgba(79,172,254,0.3); color: #b0c4e8;
+        }
+        .empty-state .server-hint {
+            margin-top: 16px; font-size: 12px; color: #445566; -webkit-text-fill-color: #445566;
+        }
+        .empty-state .server-hint code {
+            background: rgba(255,255,255,0.08); padding: 2px 8px; border-radius: 4px;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; color: #8899bb;
+        }
+
+        .loading-state {
+            display: none; position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%); z-index: 3; text-align: center;
+        }
+        .loading-state.active { display: block; }
+        .spinner {
+            width: 48px; height: 48px;
+            border: 3px solid rgba(79, 172, 254, 0.1);
+            border-top-color: #4facfe; border-radius: 50%;
+            animation: spin 0.8s linear infinite; margin: 0 auto 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-state span { font-size: 14px; color: #667799; }
+
+        .error-toast {
+            display: none; position: fixed; top: 80px; left: 50%;
+            transform: translateX(-50%); z-index: 9999;
+            background: rgba(239, 68, 68, 0.95); color: #fff;
+            padding: 12px 24px; border-radius: 12px; font-size: 14px;
+            font-weight: 500; box-shadow: 0 8px 32px rgba(239, 68, 68, 0.3);
+            backdrop-filter: blur(12px); animation: slideDown 0.3s ease; max-width: 90vw;
+        }
+        .error-toast.visible { display: block; }
+        @keyframes slideDown { from { opacity: 0; transform: translateX(-50%) translateY(-20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+        /* ===== Footer ===== */
+        footer {
+            text-align: center; padding: 14px; font-size: 12px; color: #445566;
+            border-top: 1px solid rgba(100, 140, 255, 0.06);
+            background: rgba(10, 14, 26, 0.6);
+        }
+        footer a { color: #4facfe; text-decoration: none; }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 640px) {
+            header { padding: 14px 16px; }
+            .logo { font-size: 18px; }
+            .subtitle { display: none; }
+            .search-section { padding: 14px 16px; }
+            .btn { padding: 10px 16px; font-size: 13px; }
+            .info-panel { padding: 14px 16px 16px; flex-direction: column; }
+            .antipode-connector { min-width: unset; padding: 4px 0; }
+            .connector-line { flex-direction: row; }
+            .empty-state .emoji { font-size: 42px; }
+            .empty-state h2 { font-size: 17px; }
+        }
+
+        @keyframes pulse-glow {
+            0% { box-shadow: 0 0 0 0 rgba(79, 172, 254, 0.4); }
+            70% { box-shadow: 0 0 0 12px rgba(79, 172, 254, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(79, 172, 254, 0); }
+        }
+        @keyframes pulse-glow-red {
+            0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.4); }
+            70% { box-shadow: 0 0 0 12px rgba(249, 115, 22, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
+        }
+
+        /* ===== Info Sidebar ===== */
+        #info-sidebar {
+            position: absolute;
+            top: 0; right: 0;
+            width: 380px; max-width: 95vw;
+            height: 100%;
+            z-index: 20;
+            background: linear-gradient(180deg, rgba(13, 19, 33, 0.97) 0%, rgba(10, 14, 26, 0.98) 100%);
+            border-left: 1px solid rgba(100, 140, 255, 0.12);
+            backdrop-filter: blur(12px);
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+            overflow: hidden;
+        }
+        #info-sidebar.open {
+            transform: translateX(0);
+        }
+        #info-sidebar .sidebar-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid rgba(100, 140, 255, 0.08);
+            flex-shrink: 0;
+        }
+        #info-sidebar .sidebar-header h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #b0c4e8;
+        }
+        #info-sidebar .sidebar-header .close-btn {
+            background: none;
+            border: none;
+            color: #667799;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        #info-sidebar .sidebar-header .close-btn:hover {
+            background: rgba(255,255,255,0.08);
+            color: #e0e8f0;
+        }
+
+        /* Tabs */
+        .sidebar-tabs {
+            display: flex;
+            border-bottom: 1px solid rgba(100, 140, 255, 0.08);
+            flex-shrink: 0;
+        }
+        .sidebar-tabs .tab-btn {
+            flex: 1;
+            padding: 10px 8px;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: #667799;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .sidebar-tabs .tab-btn:hover { color: #b0c4e8; }
+        .sidebar-tabs .tab-btn.active {
+            color: #4facfe;
+            border-bottom-color: #4facfe;
+        }
+
+        /* Tab content */
+        .sidebar-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 18px;
+        }
+        .sidebar-body::-webkit-scrollbar { width: 4px; }
+        .sidebar-body::-webkit-scrollbar-track { background: transparent; }
+        .sidebar-body::-webkit-scrollbar-thumb { background: rgba(100,140,255,0.2); border-radius: 4px; }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Baike tab */
+        .baike-location-badge {
+            display: inline-block;
+            font-size: 11px;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-weight: 600;
+            background: rgba(249, 115, 22, 0.15);
+            color: #f97316;
+            border: 1px solid rgba(249, 115, 22, 0.25);
+            margin-bottom: 10px;
+        }
+        .baike-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            line-height: 1.3;
+        }
+        .baike-summary {
+            font-size: 14px;
+            color: #8899bb;
+            line-height: 1.7;
+        }
+        .baike-summary a { color: #4facfe; text-decoration: none; }
+        .baike-summary a:hover { text-decoration: underline; }
+        .baike-source {
+            margin-top: 12px;
+            font-size: 12px;
+            color: #445566;
+        }
+        .baike-source a { color: #4facfe; text-decoration: none; }
+
+        /* Skeleton loading */
+        .skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.03) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+            border-radius: 6px;
+        }
+        @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        .skeleton-line { height: 14px; margin-bottom: 10px; width: 100%; }
+        .skeleton-line:nth-child(2) { width: 85%; }
+        .skeleton-line:nth-child(3) { width: 70%; }
+        .skeleton-line:nth-child(4) { width: 90%; }
+        .skeleton-line:nth-child(5) { width: 60%; }
+        .skeleton-img { width: 100%; height: 180px; margin-bottom: 12px; }
+
+        /* Photo tab */
+        .photo-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .photo-grid img {
+            width: 100%;
+            height: 140px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 1px solid rgba(100,140,255,0.08);
+            transition: transform 0.3s;
+        }
+        .photo-grid img:hover { transform: scale(1.03); }
+
+        /* News tab */
+        .news-item {
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(100,140,255,0.06);
+        }
+        .news-item:last-child { border-bottom: none; }
+        .news-item a {
+            color: #b0c4e8;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            line-height: 1.4;
+            display: block;
+            margin-bottom: 4px;
+        }
+        .news-item a:hover { color: #4facfe; }
+        .news-item .news-meta {
+            font-size: 11px;
+            color: #556688;
+        }
+
+        .empty-tab {
+            text-align: center;
+            padding: 40px 20px;
+            color: #556688;
+            font-size: 14px;
+        }
+        .empty-tab .emoji { font-size: 36px; display: block; margin-bottom: 10px; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            #info-sidebar {
+                width: 100%;
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="error-toast" id="errorToast"></div>
+
+    <header>
+        <div class="logo">
+            <div class="logo-icon">🌍</div>
+            <div>
+                地球的另一边
+                <span class="subtitle">· <span class="highlight">Antipode</span> Finder</span>
+            </div>
+        </div>
+    </header>
+
+    <div class="search-section">
+        <div class="search-wrapper">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="searchInput" placeholder="输入地点名称，如「北京」「东京」「纽约」..." autocomplete="off" />
+        </div>
+        <button class="btn btn-primary" id="searchBtn">搜索</button>
+        <button class="btn btn-locate" id="locateBtn">📍 我的位置</button>
+    </div>
+
+    <div class="main-content">
+        <!-- 3D Globe overlays the 2D map initially -->
+        <div id="globe-container"></div>
+        <div id="map" class="hidden"></div>
+
+        <div class="empty-state" id="emptyState">
+            <span class="emoji">🌏</span>
+            <h2>从脚下钻过去，看看地球另一边</h2>
+            <p>输入一个地点，或者用我的位置，找到它正对面的对跖点</p>
+            <div class="examples">
+                <button data-place="北京">北京</button>
+                <button data-place="上海">上海</button>
+                <button data-place="东京">东京</button>
+                <button data-place="纽约">纽约</button>
+                <button data-place="伦敦">伦敦</button>
+                <button data-place="悉尼">悉尼</button>
+            </div>
+            <p class="server-hint">💡 如遇网络问题，试试用 <code>node server.js</code> 启动本地服务器</p>
+        </div>
+
+        <div class="loading-state" id="loadingState">
+            <div class="spinner"></div>
+            <span>正在查找...</span>
+        </div>
+
+        <div class="info-panel" id="infoPanel">
+            <div class="info-card original-card">
+                <div class="info-card-header">
+                    <span class="badge badge-original">📍 起点</span>
+                    <span class="info-card-title">你的位置</span>
+                </div>
+                <div class="info-card-name" id="origName">—</div>
+                <div class="info-card-address" id="origAddress"></div>
+                <div class="info-card-coords" id="origCoords"></div>
+            </div>
+            <div class="antipode-connector">
+                <div class="connector-line">
+                    <span class="arrow">⬇</span>
+                    <span class="distance" id="distanceLabel">≈ 12,742 km</span>
+                    <span class="arrow">⬇</span>
+                </div>
+            </div>
+            <div class="info-card antipode-card">
+                <div class="info-card-header">
+                    <span class="badge badge-antipode">🌏 对跖点</span>
+                    <span class="info-card-title">地球另一边</span>
+                </div>
+                <div class="info-card-name" id="antiName">—</div>
+                <div class="info-card-address" id="antiAddress"></div>
+                <div class="info-card-coords" id="antiCoords"></div>
+            </div>
+        </div>
+
+        <!-- Info Sidebar -->
+        <div id="info-sidebar">
+            <div class="sidebar-header">
+                <h3>🌏 对跖点 · 详情</h3>
+                <button class="close-btn" id="sidebarClose">✕</button>
+            </div>
+            <div class="sidebar-tabs">
+                <button class="tab-btn active" data-tab="baike">📖 百科</button>
+                <button class="tab-btn" data-tab="photo">🖼️ 图片</button>
+                <button class="tab-btn" data-tab="news">📰 新闻</button>
+            </div>
+            <div class="sidebar-body" id="sidebarBody">
+                <!-- Baike tab -->
+                <div class="tab-content active" id="tabBaike">
+                    <div class="skeleton skeleton-line"></div>
+                    <div class="skeleton skeleton-line"></div>
+                    <div class="skeleton skeleton-line"></div>
+                    <div class="skeleton skeleton-line"></div>
+                    <div class="skeleton skeleton-line"></div>
+                </div>
+                <!-- Photo tab -->
+                <div class="tab-content" id="tabPhoto">
+                    <div class="skeleton skeleton-img"></div>
+                    <div class="skeleton skeleton-line"></div>
+                </div>
+                <!-- News tab -->
+                <div class="tab-content" id="tabNews">
+                    <div class="skeleton skeleton-line"></div>
+                    <div class="skeleton skeleton-line"></div>
+                    <div class="skeleton skeleton-line"></div>
+                    <div class="skeleton skeleton-line"></div>
+                    <div class="skeleton skeleton-line"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        使用 <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 地图数据 ·
+        地理编码服务由 <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a> 提供
+    </footer>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- ===== App Module (Three.js + Leaflet integration) ===== -->
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ---------------------------------------------------------------
+        // 1. DOM refs & state
+        // ---------------------------------------------------------------
+        const globeContainer = document.getElementById('globe-container');
+        const mapEl = document.getElementById('map');
+        const searchInput = document.getElementById('searchInput');
+        const searchBtn = document.getElementById('searchBtn');
+        const locateBtn = document.getElementById('locateBtn');
+        const emptyState = document.getElementById('emptyState');
+        const loadingState = document.getElementById('loadingState');
+        const infoPanel = document.getElementById('infoPanel');
+        const errorToast = document.getElementById('errorToast');
+
+        const origName = document.getElementById('origName');
+        const origAddress = document.getElementById('origAddress');
+        const origCoords = document.getElementById('origCoords');
+        const antiName = document.getElementById('antiName');
+        const antiAddress = document.getElementById('antiAddress');
+        const antiCoords = document.getElementById('antiCoords');
+        const distanceLabel = document.getElementById('distanceLabel');
+
+        let leafletMap = null;
+        let markerOriginal = null;
+        let markerAntipode = null;
+        let antipodeLine = null;
+        let currentResult = null;
+        let isSearching = false;
+
+        // ---------------------------------------------------------------
+        // 2. Constants
+        // ---------------------------------------------------------------
+        const EARTH_RADIUS_KM = 6371;
+        const NOMINATIM_URL = 'https://nominatim.openstreetmap.org';
+        const GLOBE_RADIUS = 5;
+        const CAMERA_DIST_FAR = 18;
+        const CAMERA_DIST_CLOSE = 10;
+        const CAMERA_DIST_TIGHT = 7.5;
+
+        const CORS_PROXIES = [
+            'https://corsproxy.io/?url=',
+            'https://api.allorigins.win/raw?url=',
+            'https://cors-anywhere.herokuapp.com/',
+        ];
+        let corsProxyIndex = -1;
+
+        /** Detect if running on Cloudflare Workers/Pages */
+        const IS_CLOUDFLARE = window.location.hostname.includes('workers.dev')
+            || window.location.hostname.includes('pages.dev')
+            || window.location.hostname.includes('cloudflare')
+            || (window.location.protocol !== 'file:' && window.location.hostname !== 'localhost' && !window.location.hostname.match(/^127\\./));
+
+        async function fetchWithCORS(url, options) {
+            // On Cloudflare: use the Worker's built-in proxy instead of corsproxy.io
+            if (IS_CLOUDFLARE) {
+                const proxyUrl = \`/api/proxy?url=\${encodeURIComponent(url)}\`;
+                const resp = await fetch(proxyUrl, options);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                return resp;
+            }
+            // Local/dev mode: fallback chain (direct → corsproxy.io)
+            if (corsProxyIndex === -1) {
+                try {
+                    const resp = await fetch(url, options);
+                    return resp;
+                } catch (directErr) {
+                    console.warn('Direct fetch failed, trying CORS proxy:', directErr);
+                    corsProxyIndex = 0;
+                }
+            }
+            while (corsProxyIndex < CORS_PROXIES.length) {
+                const proxy = CORS_PROXIES[corsProxyIndex];
+                const proxyUrl = proxy + encodeURIComponent(url);
+                try {
+                    const resp = await fetch(proxyUrl, options);
+                    console.log(\`CORS proxy succeeded: \${proxy}\`);
+                    return resp;
+                } catch (proxyErr) {
+                    console.warn(\`CORS proxy failed (\${proxy}):\`, proxyErr);
+                    corsProxyIndex++;
+                }
+            }
+            throw new Error('Network error: all fetch attempts failed (including CORS proxies)');
+        }
+
+        let toastTimer = null;
+        function showError(msg) {
+            errorToast.textContent = msg;
+            errorToast.classList.add('visible');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => errorToast.classList.remove('visible'), 4000);
+        }
+
+        function calcAntipode(lat, lng) {
+            const aLat = parseFloat((-lat).toFixed(6));
+            let aLng = lng + 180;
+            if (aLng > 180) aLng -= 360;
+            if (aLng < -180) aLng += 360;
+            return { lat: aLat, lng: parseFloat(aLng.toFixed(6)) };
+        }
+
+        function formatCoords(lat, lng) {
+            const latDir = lat >= 0 ? 'N' : 'S';
+            const lngDir = lng >= 0 ? 'E' : 'W';
+            return \`\${Math.abs(lat).toFixed(4)}°\${latDir}, \${Math.abs(lng).toFixed(4)}°\${lngDir}\`;
+        }
+
+        function approxDistanceKm(lat1, lng1, lat2, lng2) {
+            const R = EARTH_RADIUS_KM;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLng = (lng2 - lng1) * Math.PI / 180;
+            const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        // ---------------------------------------------------------------
+        // 3. Leaflet map helpers
+        // ---------------------------------------------------------------
+        const TILE_PROVIDERS = [
+            { name:'OpenStreetMap', url:'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', attr:'&copy; <a href="https://openstreetmap.org/copyright">OSM</a>', maxZoom:19 },
+            { name:'Esri World Street', url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', attr:'&copy; Esri', maxZoom:18 },
+            { name:'CartoDB Dark', url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr:'&copy; OSM &copy; CARTO', maxZoom:19, subdomains:'abcd' },
+        ];
+        let tileLayer = null;
+
+        async function probeTileProvider(url) {
+            const testUrl = url.replace('{s}','a').replace('{z}','0').replace('{x}','0').replace('{y}','0').replace('{r}','');
+            try {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 3000);
+                await fetch(testUrl, { method:'HEAD', mode:'no-cors', signal:controller.signal });
+                clearTimeout(timer);
+                return true;
+            } catch { return false; }
+        }
+
+        async function findWorkingTile() {
+            for (let i = 0; i < TILE_PROVIDERS.length; i++) {
+                const ok = await probeTileProvider(TILE_PROVIDERS[i].url);
+                if (ok) { console.log(\`Tile works: \${TILE_PROVIDERS[i].name}\`); return i; }
+                console.warn(\`Tile blocked: \${TILE_PROVIDERS[i].name}\`);
+            }
+            return 0;
+        }
+
+        function addTileLayer(index) {
+            if (tileLayer) leafletMap.removeLayer(tileLayer);
+            const p = TILE_PROVIDERS[index];
+            if (!p) return;
+            tileLayer = L.tileLayer(p.url, { attribution:p.attr, subdomains:p.subdomains||'abc', maxZoom:p.maxZoom }).addTo(leafletMap);
+            let fb = null, errs = 0;
+            tileLayer.on('tileerror', () => {
+                errs++;
+                if (errs >= 4 && !fb) {
+                    fb = setTimeout(() => {
+                        if (index + 1 < TILE_PROVIDERS.length) { console.warn(\`Tiles failed, switching to \${TILE_PROVIDERS[index+1].name}\`); addTileLayer(index+1); }
+                    }, 2000);
+                }
+            });
+        }
+
+        function createLeafletIcon(type) {
+            const anim = type === 'original' ? 'animation:pulse-glow 2s infinite' : 'animation:pulse-glow-red 2s infinite';
+            return L.divIcon({ className:'', html:\`<div class="marker-\${type}" style="\${anim}"></div>\`, iconSize:[28,28], iconAnchor:[14,28], popupAnchor:[0,-32] });
+        }
+
+        function updateLeafletMap(place, lat, lng) {
+            const anti = calcAntipode(lat, lng);
+            const dist = Math.round(approxDistanceKm(lat, lng, anti.lat, anti.lng));
+            if (markerOriginal) leafletMap.removeLayer(markerOriginal);
+            if (markerAntipode) leafletMap.removeLayer(markerAntipode);
+            if (antipodeLine) leafletMap.removeLayer(antipodeLine);
+
+            markerOriginal = L.marker([lat,lng], { icon:createLeafletIcon('original'), zIndexOffset:1000 }).addTo(leafletMap)
+                .bindPopup(\`<b>📍 \${place||'起点'}</b><br>\${formatCoords(lat,lng)}\`);
+            markerAntipode = L.marker([anti.lat,anti.lng], { icon:createLeafletIcon('antipode'), zIndexOffset:999 }).addTo(leafletMap)
+                .bindPopup(\`<b>🌏 对跖点</b><br>\${formatCoords(anti.lat,anti.lng)}\`);
+            antipodeLine = L.polyline([[lat,lng],[(lat+anti.lat)/2,(lng+anti.lng)/2],[anti.lat,anti.lng]], { color:'#a78bfa', weight:2, opacity:0.5, dashArray:'8,12' }).addTo(leafletMap);
+            leafletMap.fitBounds(L.latLngBounds([lat,lng],[anti.lat,anti.lng]), { padding:[60,60], maxZoom:5 });
+
+            origName.textContent = place || '未知位置';
+            origAddress.textContent = formatCoords(lat, lng);
+            origCoords.textContent = \`纬度: \${lat.toFixed(6)}° · 经度: \${lng.toFixed(6)}°\`;
+            antiName.textContent = '正在查找...';
+            antiAddress.textContent = formatCoords(anti.lat, anti.lng);
+            antiCoords.textContent = \`纬度: \${anti.lat.toFixed(6)}° · 经度: \${anti.lng.toFixed(6)}°\`;
+            distanceLabel.textContent = \`≈ \${dist.toLocaleString()} km\`;
+            infoPanel.classList.add('visible');
+            currentResult = { place, lat, lng, anti };
+            reverseGeocode(anti.lat, anti.lng);
+        }
+
+        function reverseGeocode(lat, lng) {
+            const url = \`\${NOMINATIM_URL}/reverse?lat=\${lat}&lon=\${lng}&format=jsonv2&accept-language=zh&zoom=14\`;
+            fetchWithCORS(url, { headers:{'User-Agent':'AntipodeFinder/1.0'} })
+                .then(r => { if(!r.ok) throw Error('HTTP '+r.status); return r.json(); })
+                .then(d => {
+                    if (d && d.display_name) {
+                        const addr = d.address || {};
+                        const n = d.name || addr.country || '未知区域';
+                        const city = addr.city || addr.town || addr.village || '';
+                        const state = addr.state || addr.region || addr.county || '';
+                        const ctry = addr.country || '';
+                        // Build a hierarchical name, most specific first
+                        const nameParts = [city, state, ctry].filter(Boolean);
+                        const shortName = nameParts.join(', ') || n;
+                        antiName.textContent = shortName;
+                        antiAddress.textContent = d.display_name;
+                        // Trigger sidebar content loading, passing raw address object
+                        loadSidebarContent(shortName, lat, lng, d);
+                    } else {
+                        antiName.textContent = '茫茫大海 🌊';
+                        antiAddress.textContent = formatCoords(lat, lng) + ' — 该点位于海洋中';
+                    }
+                })
+                .catch(() => { antiName.textContent = '未知区域'; antiAddress.textContent = formatCoords(lat,lng); });
+        }
+
+        // ---------------------------------------------------------------
+        // 8. SIDEBAR: 百科 · 图片 · 新闻
+        // ---------------------------------------------------------------
+        const sidebarEl = document.getElementById('info-sidebar');
+        const sidebarClose = document.getElementById('sidebarClose');
+        const sidebarBody = document.getElementById('sidebarBody');
+        const tabBaike = document.getElementById('tabBaike');
+        const tabPhoto = document.getElementById('tabPhoto');
+        const tabNews = document.getElementById('tabNews');
+
+        const isChineseUser = navigator.language.startsWith('zh');
+
+        // Tab switching
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                const tab = btn.dataset.tab;
+                if (tab === 'baike') tabBaike.classList.add('active');
+                else if (tab === 'photo') tabPhoto.classList.add('active');
+                else if (tab === 'news') tabNews.classList.add('active');
+            });
+        });
+        sidebarClose.addEventListener('click', () => sidebarEl.classList.remove('open'));
+
+        function showSidebar() { sidebarEl.classList.add('open'); }
+        function hideSidebar() { sidebarEl.classList.remove('open'); }
+
+        /** Wikipedia API: get summary + image for a location (returns JSON, works via proxy) */
+        async function fetchWikipedia(name, useCN) {
+            const domain = useCN ? 'zh.wikipedia.org' : 'en.wikipedia.org';
+            const url = \`https://\${domain}/w/api.php?action=query&prop=extracts|pageimages&exintro&explaintext&piprop=original&format=json&origin=*&titles=\${encodeURIComponent(name)}&redirects=1\`;
+            try {
+                const resp = await fetchWithCORS(url, { headers:{'User-Agent':'AntipodeFinder/1.0'} });
+                if (!resp.ok) { console.warn(\`Wikipedia \${resp.status}\`); return null; }
+                const data = await resp.json();
+                const pages = data.query && data.query.pages ? data.query.pages : {};
+                const page = Object.values(pages)[0];
+                if (!page || 'missing' in page) return null;
+                return {
+                    title: page.title,
+                    extract: page.extract || '',
+                    imageUrl: page.original ? page.original.source : null,
+                    pageUrl: \`https://\${domain}/wiki/\${encodeURIComponent(page.title)}\`,
+                    source: useCN ? '维基百科' : 'Wikipedia',
+                };
+            } catch (err) { console.warn('Wikipedia error:', err); return null; }
+        }
+
+        /** Wikipedia images: fetch multiple images from a Wikipedia article */
+        async function fetchWikipediaImages(name, useCN) {
+            const domain = useCN ? 'zh.wikipedia.org' : 'en.wikipedia.org';
+            const url = \`https://\${domain}/w/api.php?action=query&generator=images&prop=imageinfo&iiprop=url&format=json&origin=*&gimlimit=10&titles=\${encodeURIComponent(name)}&redirects=1\`;
+            try {
+                const resp = await fetchWithCORS(url, { headers:{'User-Agent':'AntipodeFinder/1.0'} });
+                if (!resp.ok) return [];
+                const data = await resp.json();
+                const pages = data.query && data.query.pages ? data.query.pages : {};
+                const urls = [];
+                for (const id in pages) {
+                    const page = pages[id];
+                    if (page.imageinfo && page.imageinfo[0] && page.imageinfo[0].url) {
+                        const imgUrl = page.imageinfo[0].url;
+                        if (imgUrl.includes('.jpg') || imgUrl.includes('.jpeg') || imgUrl.includes('.png')) {
+                            urls.push(imgUrl);
+                        }
+                    }
+                }
+                // Fallback to simple pageimages
+                if (urls.length === 0) {
+                    const fbUrl = \`https://\${domain}/w/api.php?action=query&prop=pageimages&piprop=original&format=json&origin=*&titles=\${encodeURIComponent(name)}&redirects=1\`;
+                    const fbResp = await fetchWithCORS(fbUrl, { headers:{'User-Agent':'AntipodeFinder/1.0'} });
+                    if (fbResp.ok) {
+                        const fbData = await fbResp.json();
+                        const fbPage = Object.values(fbData.query?.pages || {})[0];
+                        if (fbPage && !('missing' in fbPage) && fbPage.original) urls.push(fbPage.original.source);
+                    }
+                }
+                return [...new Set(urls)].slice(0, 6);
+            } catch { return []; }
+        }
+
+        /** Wikimedia Commons: search for diverse images (landscapes, people, etc.) */
+        async function fetchCommonsImages(name) {
+            // Search with diverse keywords on Wikimedia Commons
+            const keywords = ['', 'landscape', 'view', 'street', 'people', 'nature', 'city'];
+            const allUrls = [];
+            for (const kw of keywords) {
+                const q = kw ? \`\${name} \${kw}\` : name;
+                const url = \`https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch=\${encodeURIComponent(q)}&srnamespace=6&srlimit=4&format=json&origin=*\`;
+                try {
+                    const resp = await fetchWithCORS(url, { headers:{'User-Agent':'AntipodeFinder/1.0'} });
+                    if (!resp.ok) continue;
+                    const data = await resp.json();
+                    const results = data.query?.search || [];
+                    for (const r of results) {
+                        const title = r.title.replace(/^File:/, '');
+                        if (title.match(/\\.(jpg|jpeg|png)$/i)) {
+                            const imgUrl = \`https://commons.wikimedia.org/wiki/Special:FilePath/\${encodeURIComponent(title)}\`;
+                            if (!allUrls.includes(imgUrl)) allUrls.push(imgUrl);
+                            if (allUrls.length >= 8) break;
+                        }
+                    }
+                    if (allUrls.length >= 8) break;
+                } catch { continue; }
+            }
+            return allUrls.slice(0, 6);
+        }
+
+        /** Fetch images for a location — Wikipedia article images + Commons supplement */
+        async function fetchLocationImages(name, useCN) {
+            // 1. Try Wikipedia article images
+            let urls = await fetchWikipediaImages(name, useCN);
+            // 2. If fewer than 4, supplement with Wikimedia Commons search
+            if (urls.length < 4) {
+                const commons = await fetchCommonsImages(name);
+                for (const u of commons) {
+                    if (!urls.includes(u)) urls.push(u);
+                    if (urls.length >= 6) break;
+                }
+            }
+            // 3. Final fallback: Bing image search
+            if (urls.length === 0) {
+                const bing = await fetchBingImage(name, useCN);
+                urls = bing;
+            }
+            return urls.slice(0, 6);
+        }
+
+        /** Try multiple name candidates — Wikipedia first, then Bing knowledge card fallback */
+        async function fetchBaikeForNames(names, preferChinese) {
+            for (const name of names) {
+                if (!name || name.length < 2) continue;
+                const r = await fetchWikipedia(name, preferChinese);
+                if (r) return r;
+            }
+            for (const name of names) {
+                if (!name || name.length < 2) continue;
+                const r = await fetchBingKnowledge(name, preferChinese);
+                if (r) return r;
+            }
+            return null;
+        }
+
+        /** Bing Knowledge: search and extract knowledge card (fallback) */
+        async function fetchBingKnowledge(name, useCN) {
+            const base = useCN ? 'https://cn.bing.com' : 'https://www.bing.com';
+            try {
+                const url = \`\${base}/search?q=\${encodeURIComponent(name)}\`;
+                const resp = await fetchWithCORS(url, { headers:{'User-Agent':'Mozilla/5.0'} });
+                if (!resp.ok) return null;
+                const html = await resp.text();
+                const p = new DOMParser();
+                const doc = p.parseFromString(html, 'text/html');
+                let title = null, extract = '', imageUrl = null;
+                const entityTitle = doc.querySelector('.b_entityTitle, .lc_expfact .btitle, .entCont h2');
+                if (entityTitle) {
+                    title = entityTitle.textContent.trim();
+                    const desc = doc.querySelector('.b_entityDesc, .lc_expfact .b_snippet, .lc_expfact .b_caption, .entCont .b_snippet');
+                    if (desc) extract = desc.textContent.trim();
+                    const img = doc.querySelector('.b_entityThumb img, .entImg img, .lc_expfact img');
+                    if (img) { const src = img.getAttribute('src') || img.getAttribute('data-src') || ''; if (src) imageUrl = src.startsWith('//') ? 'https:' + src : src; }
+                }
+                if (!title) {
+                    const firstResult = doc.querySelector('#b_results .b_algo h2 a');
+                    if (firstResult) {
+                        title = firstResult.textContent.trim();
+                        const cap = doc.querySelector('#b_results .b_algo .b_caption p, #b_results .b_algo .b_snippet');
+                        if (cap) extract = cap.textContent.trim();
+                    }
+                }
+                if (!title) return null;
+                const sourceLink = doc.querySelector('.b_entitySource a, .lc_expfact .b_sourcelist a, .b_sourcelist a, .b_algo h2 a');
+                const pageUrl = sourceLink ? sourceLink.getAttribute('href') || '' : \`\${base}/search?q=\${encodeURIComponent(title)}\`;
+                return { title, extract: extract.substring(0, 500), imageUrl, pageUrl, source: useCN ? '必应' : 'Bing' };
+            } catch { return null; }
+        }
+
+        /** Bing Image Search: fetch image URLs (fallback) */
+        async function fetchBingImage(name, useCN) {
+            const base = useCN ? 'https://cn.bing.com' : 'https://www.bing.com';
+            try {
+                const url = \`\${base}/images/search?q=\${encodeURIComponent(name)}\`;
+                const resp = await fetchWithCORS(url, { headers:{'User-Agent':'Mozilla/5.0'} });
+                if (!resp.ok) return [];
+                const html = await resp.text();
+                const p = new DOMParser();
+                const doc = p.parseFromString(html, 'text/html');
+                const urls = [];
+                doc.querySelectorAll('img.mimg, .imgpt img, .mimg, .gallery img, [class*="img"] img').forEach(img => {
+                    let src = img.getAttribute('src') || img.getAttribute('data-src') || '';
+                    if (src && src.startsWith('http') && !src.includes('th?id=OIP.') && !src.includes('data:image')) {
+                        urls.push(src);
+                    }
+                });
+                if (urls.length === 0) {
+                    const scripts = doc.querySelectorAll('script');
+                    for (const s of scripts) {
+                        const txt = s.textContent || '';
+                        const patterns = [/"thumbUrl":"(https:[^"]+)"/, /"mediaUrl":"(https:[^"]+)"/, /"contentUrl":"(https:[^"]+)"/, /"imgUrl":"(https:[^"]+)"/, /"url":"(https:[^"]+?\\.(?:jpg|jpeg|png|gif|webp))"/, /"murl":"(https:[^"]+)"/];
+                        for (const pat of patterns) {
+                            let m; while ((m = pat.exec(txt)) !== null) { const u = m[1].replace(/\\\\\\//g, '/').replace(/\\\\\\\\/g, ''); if (u && u.startsWith('http') && !urls.includes(u)) urls.push(u); if (urls.length >= 6) break; }
+                            if (urls.length >= 6) break;
+                        }
+                        if (urls.length >= 6) break;
+                    }
+                }
+                return [...new Set(urls)].slice(0, 4);
+            } catch { return []; }
+        }
+
+        /** Fetch Bing News search results */
+        async function fetchBingNews(name, useCN) {
+            const base = useCN ? 'https://cn.bing.com' : 'https://www.bing.com';
+            // Try RSS-based news first (structured data)
+            try {
+                const rssUrl = \`\${base}/news/search?q=\${encodeURIComponent(name)}&format=rss\`;
+                const resp = await fetchWithCORS(rssUrl, { headers:{'User-Agent':'Mozilla/5.0'} });
+                if (resp.ok) {
+                    const xml = await resp.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(xml, 'text/xml');
+                    const items = [];
+                    doc.querySelectorAll('item').forEach(el => {
+                        const title = el.querySelector('title')?.textContent || '';
+                        const link = el.querySelector('link')?.textContent || '';
+                        const desc = el.querySelector('description')?.textContent || '';
+                        const date = el.querySelector('pubDate')?.textContent || '';
+                        if (title) items.push({ title, snippet: desc.replace(/<[^>]+>/g, '').substring(0, 120), url: link, date });
+                    });
+                    if (items.length > 0) return items.slice(0, 6);
+                }
+            } catch { /* fall through to HTML parse */ }
+
+            // Fallback: parse HTML news page
+            try {
+                const resp = await fetchWithCORS(url, { headers:{'User-Agent':'Mozilla/5.0'} });
+                if (!resp.ok) return [];
+                const html = await resp.text();
+                const p = new DOMParser();
+                const doc = p.parseFromString(html, 'text/html');
+                const items = [];
+                doc.querySelectorAll('.news-card, .newsitem, .card').forEach(el => {
+                    const a = el.querySelector('a[href]');
+                    const title = a ? a.textContent.trim() : '';
+                    const link = a ? a.getAttribute('href') || '' : '';
+                    const snippet = el.querySelector('.snippet, .abstract')?.textContent?.trim() || '';
+                    if (title) items.push({ title, snippet: snippet.substring(0, 120), url: link, date: '' });
+                });
+                return items.slice(0, 6);
+            } catch { return []; }
+        }
+
+        /** Main: load all sidebar content for the antipode */
+        async function loadSidebarContent(antiName, antiLat, antiLng, rawAddress) {
+            if (!antiName || antiName === '—' || antiName === '正在查找...') return;
+
+            // Show skeletons
+            tabBaike.innerHTML = '<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div>';
+            tabPhoto.innerHTML = '<div class="skeleton skeleton-img"></div><div class="skeleton skeleton-line"></div>';
+            tabNews.innerHTML = '<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div>';
+
+            showSidebar();
+
+            // Build multiple search name candidates, most specific first
+            // rawAddress is now the full Nominatim response object
+            const addr = (rawAddress && rawAddress.address) ? rawAddress.address : {};
+            const parts = antiName.split(/[,，、]/).map(s => s.trim()).filter(Boolean);
+            const candidates = [];
+            // 1. Full name as-is
+            candidates.push(antiName);
+            // 2. Each comma-separated part
+            for (const p of parts) candidates.push(p);
+            // 3. Build from address hierarchy (most specific → least)
+            const hierParts = [
+                addr.city || addr.town || addr.village || addr.hamlet || addr.locality || '',
+                addr.state || addr.region || addr.county || addr.province || addr.state_district || '',
+                addr.country || '',
+            ].filter(Boolean);
+            if (hierParts.length >= 2) {
+                candidates.push(hierParts.join(', '));                    // e.g. "门多萨, 阿根廷"
+                candidates.push(hierParts.filter((_,i) => i > 0).join(', ')); // e.g. "阿根廷"
+            }
+            // 4. Try English locality name if available
+            if (addr.city || addr.town) {
+                const loc = addr.city || addr.town || '';
+                if (loc && !candidates.includes(loc)) candidates.push(loc);
+            }
+            // 5. From display_name first meaningful token
+            if (rawAddress && rawAddress.display_name) {
+                const first = rawAddress.display_name.split(/[,，、]/)[0].trim();
+                if (first && !candidates.includes(first) && first.length >= 2) candidates.push(first);
+            }
+            // 6. Deduplicate
+            const uniqueCandidates = [...new Set(candidates)].filter(n => n && n.length >= 2);
+
+            // Load baike with multi-candidate search
+            const baike = await fetchBaikeForNames(uniqueCandidates, isChineseUser);
+            const bestName = uniqueCandidates[0] || antiName;
+
+            if (baike) {
+                tabBaike.innerHTML = \`
+                    <div class="baike-location-badge">🌏 对跖点</div>
+                    <div class="baike-title">\${escapeHtml(baike.title)}</div>
+                    <div class="baike-summary">\${escapeHtml(baike.extract.substring(0, 600))}\${baike.extract.length > 600 ? '...' : ''}</div>
+                    <div class="baike-source">来源: <a href="\${baike.pageUrl}" target="_blank" rel="noopener">\${baike.source}</a></div>
+                \`;
+
+                // Photo tab: fetch images (Wikipedia first, Bing fallback)
+                fetchLocationImages(baike.title, isChineseUser).then(urls => {
+                    if (urls.length > 0) {
+                        tabPhoto.innerHTML = \`<div class="photo-grid">\${urls.map(u => \`<img src="\${u}" alt="\${escapeHtml(baike.title)}" onerror="this.style.display='none'">\`).join('')}</div>\`;
+                    } else {
+                        // Try the knowledge card image as fallback
+                        if (baike.imageUrl) {
+                            tabPhoto.innerHTML = \`<div class="photo-grid"><img src="\${baike.imageUrl}" alt="\${escapeHtml(baike.title)}" onerror="this.style.display='none'"></div>\`;
+                        } else {
+                            tabPhoto.innerHTML = '<div class="empty-tab"><span class="emoji">🖼️</span>暂无图片</div>';
+                        }
+                    }
+                });
+            } else {
+                tabBaike.innerHTML = \`<div class="empty-tab"><span class="emoji">📖</span>暂无百科信息</div>\`;
+                // Still try image search even without baike
+                fetchLocationImages(bestName, isChineseUser).then(urls => {
+                    tabPhoto.innerHTML = urls.length > 0
+                        ? \`<div class="photo-grid">\${urls.map(u => \`<img src="\${u}" alt="" onerror="this.style.display='none'">\`).join('')}</div>\`
+                        : '<div class="empty-tab"><span class="emoji">🖼️</span>暂无图片</div>';
+                });
+            }
+
+            // Load news from Bing using the most specific name
+            let items = [];
+            if (isChineseUser) {
+                items = await fetchBingNews(bestName, true);
+                if (items.length === 0) items = await fetchBingNews(bestName, false);
+            } else {
+                items = await fetchBingNews(bestName, false);
+                if (items.length === 0) items = await fetchBingNews(bestName, true);
+            }
+
+            if (items.length > 0) {
+                tabNews.innerHTML = items.map(item => \`
+                    <div class="news-item">
+                        <a href="\${item.url}" target="_blank" rel="noopener">\${escapeHtml(item.title)}</a>
+                        <div class="news-meta">\${escapeHtml(item.snippet || item.date || '必应新闻')}</div>
+                    </div>
+                \`).join('');
+            } else {
+                tabNews.innerHTML = '<div class="empty-tab"><span class="emoji">📰</span>暂无相关新闻</div>';
+            }
+        }
+
+        function escapeHtml(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        function searchPlace(query) {
+            if (isSearching) return;
+            if (!query || !query.trim()) { showError('请输入地点名称'); return; }
+            const q = query.trim();
+            isSearching = true;
+            emptyState.style.display = 'none';
+            loadingState.classList.add('active');
+
+            const url = \`\${NOMINATIM_URL}/search?q=\${encodeURIComponent(q)}&format=jsonv2&accept-language=zh&limit=5&bounded=0\`;
+            fetchWithCORS(url, { headers:{'User-Agent':'AntipodeFinder/1.0'} })
+                .then(r => { if(!r.ok) throw Error('HTTP '+r.status); return r.json(); })
+                .then(data => {
+                    loadingState.classList.remove('active');
+                    if (!data || data.length === 0) {
+                        emptyState.style.display = ''; showError(\`未找到地点「\${q}」\`); isSearching = false; return;
+                    }
+                    const result = data[0];
+                    const lat = parseFloat(result.lat);
+                    const lng = parseFloat(result.lon);
+                    const anti = calcAntipode(lat, lng);
+
+                    // --- Trigger 3D globe animation ---
+                    globe.showSearchAnimation(lat, lng, anti.lat, anti.lng, () => {
+                        // Callback: animation done → switch to Leaflet
+                        globe.fadeOut();
+                        mapEl.classList.remove('hidden');
+                        const name = result.display_name?.split(',')[0] || result.name || q;
+                        updateLeafletMap(name, lat, lng);
+                        isSearching = false;
+                    });
+                })
+                .catch(err => {
+                    loadingState.classList.remove('active'); emptyState.style.display = '';
+                    showError(err.message.includes('Network error') ? '网络请求失败，请尝试用本地服务器打开' : '查询失败，请检查网络后重试');
+                    console.error('Geocode error:', err); isSearching = false;
+                });
+        }
+
+        function useCurrentLocation() {
+            if (!navigator.geolocation) { showError('您的浏览器不支持地理定位'); return; }
+            locateBtn.disabled = true; locateBtn.textContent = '⏳ 获取中...';
+            emptyState.style.display = 'none'; loadingState.classList.add('active');
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    const lat = pos.coords.latitude, lng = pos.coords.longitude;
+                    const url = \`\${NOMINATIM_URL}/reverse?lat=\${lat}&lon=\${lng}&format=jsonv2&accept-language=zh&zoom=14\`;
+                    fetchWithCORS(url, { headers:{'User-Agent':'AntipodeFinder/1.0'} })
+                        .then(r => r.json())
+                        .then(data => {
+                            loadingState.classList.remove('active');
+                            const name = data.display_name?.split(',')[0] || '我的位置';
+                            const city = data.address?.city || data.address?.town || data.address?.village || data.address?.county || '';
+                            const ctry = data.address?.country || '';
+                            const fullName = [city, ctry].filter(Boolean).join(', ') || name;
+                            const anti = calcAntipode(lat, lng);
+                            globe.showSearchAnimation(lat, lng, anti.lat, anti.lng, () => {
+                                globe.fadeOut();
+                                mapEl.classList.remove('hidden');
+                                updateLeafletMap(fullName, lat, lng);
+                                locateBtn.disabled = false; locateBtn.textContent = '📍 我的位置';
+                            });
+                        })
+                        .catch(() => {
+                            loadingState.classList.remove('active');
+                            const anti = calcAntipode(lat, lng);
+                            globe.showSearchAnimation(lat, lng, anti.lat, anti.lng, () => {
+                                globe.fadeOut();
+                                mapEl.classList.remove('hidden');
+                                updateLeafletMap('我的位置', lat, lng);
+                                locateBtn.disabled = false; locateBtn.textContent = '📍 我的位置';
+                            });
+                        });
+                },
+                (err) => {
+                    loadingState.classList.remove('active'); emptyState.style.display = '';
+                    locateBtn.disabled = false; locateBtn.textContent = '📍 我的位置';
+                    const msgs = {1:'请允许定位',2:'无法获取位置',3:'定位超时'};
+                    showError(msgs[err.code] || '定位失败');
+                },
+                { enableHighAccuracy:false, timeout:10000, maximumAge:60000 }
+            );
+        }
+
+        // ---------------------------------------------------------------
+        // 4. THREE.JS 3D GLOBE
+        // ---------------------------------------------------------------
+        const globe = {
+            scene: null, camera: null, renderer: null,
+            globeGroup: null, earth: null, glowMesh: null,
+            markers: [],
+            autoRotate: true,
+            animating: false,
+
+            init() {
+                const w = globeContainer.clientWidth;
+                const h = globeContainer.clientHeight;
+
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(35, w / h, 0.1, 1000);
+                this.camera.position.set(0, 0, CAMERA_DIST_FAR);
+
+                this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+                this.renderer.setSize(w, h);
+                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                this.renderer.domElement.style.pointerEvents = 'none';
+                globeContainer.appendChild(this.renderer.domElement);
+
+                // Group for the globe
+                this.globeGroup = new THREE.Group();
+                this.scene.add(this.globeGroup);
+
+                // Marker group — children of globeGroup so markers rotate with Earth
+                this.markerGroup = new THREE.Group();
+                this.globeGroup.add(this.markerGroup);
+
+                // Lights
+                this.scene.add(new THREE.AmbientLight(0x404060, 0.6));
+                const dl = new THREE.DirectionalLight(0xffffff, 1.5);
+                dl.position.set(5, 10, 7);
+                this.scene.add(dl);
+                const bl = new THREE.DirectionalLight(0x4facfe, 0.4);
+                bl.position.set(-5, -5, -10);
+                this.scene.add(bl);
+
+                // Earth
+                this.createEarth();
+                // Clouds
+                this.createClouds();
+                // Atmosphere glow
+                this.createAtmosphere();
+                // Stars
+                this.createStars();
+
+                // Resize
+                window.addEventListener('resize', () => this.resize());
+
+                // Start loop
+                this.loop();
+            },
+
+            // ---- Earth texture: CDN real texture with procedural fallback ----
+            loadEarthTexture(callback) {
+                const tryLoad = (urls, idx) => {
+                    if (idx >= urls.length) {
+                        console.warn('All CDN textures failed, using procedural fallback');
+                        callback(this.generateProceduralTexture());
+                        return;
+                    }
+                    const loader = new THREE.TextureLoader();
+                    loader.load(
+                        urls[idx],
+                        (tex) => { console.log(\`Earth texture loaded: \${urls[idx]}\`); callback(tex); },
+                        undefined,
+                        () => { console.warn(\`Texture load failed: \${urls[idx]}\`); tryLoad(urls, idx + 1); }
+                    );
+                };
+                tryLoad([
+                    'https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-blue-marble.jpg',
+                    'https://unpkg.com/three-globe@2.24.11/example/img/earth-blue-marble.jpg',
+                ], 0);
+            },
+
+            /** Generate a noise-based procedural Earth texture (fallback) */
+            generateProceduralTexture() {
+                const W = 2048, H = 1024;
+                const c = document.createElement('canvas');
+                c.width = W; c.height = H;
+                const ctx = c.getContext('2d');
+                const imgData = ctx.createImageData(W, H);
+                const d = imgData.data;
+
+                // Simple value noise helper
+                function hash(x, y) { let h = x * 374761393 + y * 668265263; h = (h ^ (h >> 13)) * 1274126177; return (h ^ (h >> 16)) / 2147483647; }
+                function smoothNoise(x, y) {
+                    const ix = Math.floor(x), iy = Math.floor(y);
+                    const fx = x - ix, fy = y - iy;
+                    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+                    const a = hash(ix, iy), b = hash(ix + 1, iy), c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+                    return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+                }
+                function fbm(x, y, octaves) {
+                    let v = 0, amp = 0.5, freq = 1;
+                    for (let i = 0; i < octaves; i++) { v += amp * smoothNoise(x * freq, y * freq); freq *= 2; amp *= 0.5; }
+                    return v;
+                }
+
+                const landThreshold = 0.48;
+                for (let py = 0; py < H; py++) {
+                    for (let px = 0; px < W; px++) {
+                        // Map pixel to lat/lng space with seam correction
+                        const u = px / W, v = py / H;
+                        // Use 3D noise by mapping to sphere coordinates to avoid seams
+                        const theta = u * 2 * Math.PI;
+                        const phi = v * Math.PI;
+                        const nx = Math.sin(phi) * Math.cos(theta);
+                        const ny = Math.cos(phi);
+                        const nz = Math.sin(phi) * Math.sin(theta);
+                        // Sample noise in 3D using 2D slices at different scales
+                        const n = fbm(nx * 1.5 + 5.3, ny * 1.5 + 2.7 + nz * 0.5, 6);
+
+                        const idx = (py * W + px) * 4;
+                        if (n > landThreshold) {
+                            // Land: green to brown gradient based on noise value and latitude
+                            const elev = (n - landThreshold) / (1 - landThreshold);
+                            const latFactor = Math.abs(v - 0.5) * 2; // 0 at equator, 1 at poles
+                            const r = 60 + 120 * elev * (1 - latFactor * 0.4);
+                            const g = 80 + 140 * elev * (1 - latFactor * 0.3) - 40 * latFactor;
+                            const b = 30 + 60 * elev * (1 - latFactor * 0.5);
+                            d[idx] = Math.min(255, r);
+                            d[idx+1] = Math.min(255, g);
+                            d[idx+2] = Math.min(255, b);
+                        } else {
+                            // Ocean: blue gradient based on depth and latitude
+                            const depth = (landThreshold - n) / landThreshold;
+                            const latFactor = Math.abs(v - 0.5) * 2;
+                            const r = 10 + 30 * (1 - depth) * (1 - latFactor * 0.3);
+                            const g = 40 + 90 * (1 - depth) * (1 - latFactor * 0.2);
+                            const b = 80 + 140 * (1 - depth);
+                            d[idx] = Math.min(255, r);
+                            d[idx+1] = Math.min(255, g);
+                            d[idx+2] = Math.min(255, b);
+                        }
+                        d[idx+3] = 255;
+                    }
+                }
+                ctx.putImageData(imgData, 0, 0);
+
+                // Subtle grid overlay
+                ctx.strokeStyle = 'rgba(79,172,254,0.04)';
+                ctx.lineWidth = 1;
+                for (let lat = -80; lat <= 80; lat += 20) { const y = (90 - lat) / 180 * H; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+                for (let lng = -180; lng < 180; lng += 20) { const x = (lng + 180) / 360 * W; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+
+                return new THREE.CanvasTexture(c);
+            },
+
+            /** Generate a noise-based cloud texture */
+            generateCloudTexture() {
+                const W = 1024, H = 512;
+                const c = document.createElement('canvas');
+                c.width = W; c.height = H;
+                const ctx = c.getContext('2d');
+                const imgData = ctx.createImageData(W, H);
+                const d = imgData.data;
+
+                function hash(x, y) { let h = x * 374761393 + y * 668265263; h = (h ^ (h >> 13)) * 1274126177; return (h ^ (h >> 16)) / 2147483647; }
+                function sn(x, y) { const ix=Math.floor(x), iy=Math.floor(y); const fx=x-ix, fy=y-iy; const ux=fx*fx*(3-2*fx), uy=fy*fy*(3-2*fy); return hash(ix,iy)+(hash(ix+1,iy)-hash(ix,iy))*ux+(hash(ix,iy+1)-hash(ix,iy))*uy+(hash(ix,iy)-hash(ix+1,iy)-hash(ix,iy+1)+hash(ix+1,iy+1))*ux*uy; }
+                function f(x,y) { let v=0,a=0.5,f=1; for(let i=0;i<5;i++){v+=a*sn(x*f,y*f);f*=2.2;a*=0.45;} return v; }
+
+                for (let py = 0; py < H; py++) {
+                    for (let px = 0; px < W; px++) {
+                        const u = px / W, v = py / H;
+                        const theta = u * 2 * Math.PI;
+                        const phi = v * Math.PI;
+                        const nx = Math.sin(phi) * Math.cos(theta);
+                        const ny = Math.cos(phi);
+                        const nz = Math.sin(phi) * Math.sin(theta);
+                        const n = f(nx * 2 + 10, ny * 2 + nz * 1.5);
+                        const alpha = Math.max(0, Math.min(1, (n - 0.35) * 4));
+                        const idx = (py * W + px) * 4;
+                        d[idx] = 255; d[idx+1] = 255; d[idx+2] = 255;
+                        d[idx+3] = Math.floor(alpha * 180);
+                    }
+                }
+                ctx.putImageData(imgData, 0, 0);
+                return new THREE.CanvasTexture(c);
+            },
+
+            createEarth() {
+                this.loadEarthTexture((tex) => {
+                    const geo = new THREE.SphereGeometry(GLOBE_RADIUS, 96, 96);
+                    const mat = new THREE.MeshPhongMaterial({ map: tex, specular: new THREE.Color(0x222244), shininess: 15 });
+                    if (this.earth) {
+                        this.earth.geometry.dispose();
+                        this.earth.material.dispose();
+                        this.globeGroup.remove(this.earth);
+                    }
+                    this.earth = new THREE.Mesh(geo, mat);
+                    this.globeGroup.add(this.earth);
+                });
+
+                // Start with procedural texture immediately, texture loader will swap when done
+                const fallbackTex = this.generateProceduralTexture();
+                const geo = new THREE.SphereGeometry(GLOBE_RADIUS, 96, 96);
+                const mat = new THREE.MeshPhongMaterial({ map: fallbackTex, specular: new THREE.Color(0x222244), shininess: 15 });
+                this.earth = new THREE.Mesh(geo, mat);
+                this.globeGroup.add(this.earth);
+            },
+
+            createClouds() {
+                const tex = this.generateCloudTexture();
+                const geo = new THREE.SphereGeometry(GLOBE_RADIUS * 1.01, 64, 64);
+                const mat = new THREE.MeshPhongMaterial({ map: tex, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending });
+                this.clouds = new THREE.Mesh(geo, mat);
+                this.globeGroup.add(this.clouds);
+            },
+
+            createAtmosphere() {
+                const geo = new THREE.SphereGeometry(GLOBE_RADIUS * 1.04, 48, 48);
+                const mat = new THREE.ShaderMaterial({
+                    vertexShader: \`varying vec3 vNormal; void main(){ vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }\`,
+                    fragmentShader: \`varying vec3 vNormal; void main(){ float intensity = pow(0.7 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.5); gl_FragColor = vec4(0.31, 0.68, 1.0, intensity * 0.5); }\`,
+                    blending: THREE.AdditiveBlending, side: THREE.BackSide, transparent: true,
+                });
+                this.glowMesh = new THREE.Mesh(geo, mat);
+                this.globeGroup.add(this.glowMesh);
+            },
+
+            createStars() {
+                const geo = new THREE.BufferGeometry();
+                const count = 2000;
+                const pos = new Float32Array(count * 3);
+                for (let i = 0; i < count * 3; i++) pos[i] = (Math.random() - 0.5) * 200;
+                geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                const mat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.2, transparent: true, opacity: 0.8 });
+                this.stars = new THREE.Points(geo, mat);
+                this.scene.add(this.stars);
+            },
+
+            // ---- Marker system ----
+            markers: [],
+
+            clearMarkers() {
+                while (this.markerGroup.children.length) {
+                    const c = this.markerGroup.children[0];
+                    if (c.geometry) c.geometry.dispose();
+                    if (c.material) c.material.dispose();
+                    this.markerGroup.remove(c);
+                }
+                this.markers = [];
+            },
+
+            addMarker(lat, lng, color) {
+                const pos = this.latLngToVec(lat, lng, GLOBE_RADIUS);
+                // Pin sphere
+                const geo = new THREE.SphereGeometry(0.18, 16, 16);
+                const mat = new THREE.MeshBasicMaterial({ color });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.copy(pos);
+                this.markerGroup.add(mesh);
+                this.markers.push(mesh);
+
+                // Glow ring (ray/sprite)
+                const ringGeo = new THREE.RingGeometry(0.22, 0.35, 32);
+                const ringMat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.6 });
+                const ring = new THREE.Mesh(ringGeo, ringMat);
+                ring.position.copy(pos);
+                ring.lookAt(0, 0, 0); // face outward from globe center
+                this.markerGroup.add(ring);
+                this.markers.push(ring);
+
+                // Glow pulse sprite
+                const spriteMap = this.makeGlowSprite(color);
+                const spriteMat = new THREE.SpriteMaterial({ map: spriteMap, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.5 });
+                const sprite = new THREE.Sprite(spriteMat);
+                sprite.position.copy(pos);
+                sprite.scale.set(1.2, 1.2, 1);
+                this.markerGroup.add(sprite);
+                this.markers.push(sprite);
+            },
+
+            makeGlowSprite(color) {
+                const c = document.createElement('canvas');
+                c.width = 64; c.height = 64;
+                const ctx = c.getContext('2d');
+                const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+                g.addColorStop(0, color);
+                g.addColorStop(0.4, color + '88');
+                g.addColorStop(1, 'transparent');
+                ctx.fillStyle = g;
+                ctx.fillRect(0, 0, 64, 64);
+                return new THREE.CanvasTexture(c);
+            },
+
+            latLngToVec(lat, lng, radius) {
+                const phi = (90 - lat) * Math.PI / 180;
+                const theta = (lng + 180) * Math.PI / 180;
+                return new THREE.Vector3(
+                    -radius * Math.sin(phi) * Math.cos(theta),
+                    radius * Math.cos(phi),
+                    radius * Math.sin(phi) * Math.sin(theta)
+                );
+            },
+
+            // ---- Camera animation ----
+            tweenPos(from, to, duration, onUpdate, onDone, easingType) {
+                const start = performance.now();
+                const easeInOut = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+                const easeInOutStrong = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+                const easeFn = easingType === 'strong' ? easeInOutStrong : easeInOut;
+                function tick(now) {
+                    const t = Math.min((now - start) / duration, 1);
+                    onUpdate(easeFn(t));
+                    if (t < 1) requestAnimationFrame(tick);
+                    else if (onDone) onDone();
+                }
+                requestAnimationFrame(tick);
+            },
+
+            /** Fly to a lat/lng with an optional mid-point for a sweeping arc. */
+            /** Convert local-space lat/lng direction to world space (accounting for globe rotation) */
+            localToWorld(pos) {
+                return pos.clone().applyEuler(new THREE.Euler(0, this.globeGroup.rotation.y, 0));
+            },
+
+            flyTo(lat, lng, dist, duration, onDone, arcMid) {
+                this.autoRotate = false;
+                const targetPos = this.localToWorld(this.latLngToVec(lat, lng, dist));
+                const startPos = this.camera.position.clone();
+
+                if (arcMid) {
+                    const midPos = this.localToWorld(this.latLngToVec(arcMid.lat, arcMid.lng, dist * 1.2));
+                    const halfDur = duration / 2;
+                    this.tweenPos(startPos, midPos, halfDur, (t) => {
+                        this.camera.position.lerpVectors(startPos, midPos, t);
+                        this.camera.lookAt(0, 0, 0);
+                    }, () => {
+                        const p2 = this.camera.position.clone();
+                        this.tweenPos(p2, targetPos, halfDur, (t) => {
+                            this.camera.position.lerpVectors(p2, targetPos, t);
+                            this.camera.lookAt(0, 0, 0);
+                        }, onDone);
+                    });
+                } else {
+                    this.tweenPos(startPos, targetPos, duration, (t) => {
+                        this.camera.position.lerpVectors(startPos, targetPos, t);
+                        this.camera.lookAt(0, 0, 0);
+                    }, onDone);
+                }
+            },
+
+            /** Full ritual animation: zoom to origin → pull back → sweep to antipode → zoom in */
+            showSearchAnimation(lat, lng, antiLat, antiLng, onComplete) {
+                if (this.animating) return;
+                this.animating = true;
+                this.autoRotate = false;
+                this.clearMarkers();
+
+                globeContainer.classList.remove('faded');
+                mapEl.classList.add('hidden');
+
+                const P = (ms) => new Promise(r => setTimeout(r, ms));
+
+                const steps = [
+                    // Step 1: Slow approach to starting location (dramatic entrance)
+                    (done) => {
+                        this.flyTo(lat, lng, CAMERA_DIST_FAR + 2, 1800, async () => {
+                            await P(600);
+                            done();
+                        }, { lat: (lat + 15) % 90 - 10, lng: lng - 20 });
+                    },
+                    // Step 2: Closer zoom + marker appears
+                    (done) => {
+                        this.flyTo(lat, lng, CAMERA_DIST_CLOSE, 1400, async () => {
+                            this.addMarker(lat, lng, '#4facfe');
+                            await P(1000); // Hold and admire the starting point
+                            done();
+                        });
+                    },
+                    // Step 3: Slow pull-back (camera arcs up and away)
+                    (done) => {
+                        this.flyTo((lat + antiLat) / 2, (lng + antiLng) / 2, CAMERA_DIST_FAR + 6, 2200, async () => {
+                            await P(500);
+                            done();
+                        }, { lat: (lat + 60) % 180 - 90, lng: lng + 40 });
+                    },
+                    // Step 4: Grand sweep to antipode (wide arc across the globe)
+                    (done) => {
+                        this.addMarker(antiLat, antiLng, '#f97316');
+                        this.flyTo(antiLat, antiLng, CAMERA_DIST_FAR + 3, 2500, async () => {
+                            await P(800); // Pause to appreciate the antipode
+                            done();
+                        }, { lat: (lat + antiLat) / 2 + 20, lng: (lng + antiLng) / 2 });
+                    },
+                    // Step 5: Final approach to antipode
+                    (done) => {
+                        this.flyTo(antiLat, antiLng, CAMERA_DIST_TIGHT, 1600, async () => {
+                            await P(1000); // Final dramatic pause
+                            done();
+                        });
+                    },
+                ];
+
+                let idx = 0;
+                const runNext = () => {
+                    if (idx < steps.length) steps[idx++](runNext);
+                    else {
+                        this.animating = false;
+                        if (onComplete) onComplete();
+                    }
+                };
+                runNext();
+            },
+
+            fadeOut(duration = 600) {
+                globeContainer.classList.add('faded');
+            },
+
+            resize() {
+                if (!this.renderer) return;
+                const w = globeContainer.clientWidth;
+                const h = globeContainer.clientHeight;
+                this.camera.aspect = w / h;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(w, h);
+            },
+
+            // ---- Animation loop ----
+            loop() {
+                requestAnimationFrame(() => this.loop());
+                if (this.autoRotate && this.globeGroup) {
+                    this.globeGroup.rotation.y += 0.002;
+                }
+                // Clouds rotate slightly faster for a drifting effect
+                if (this.clouds) {
+                    this.clouds.rotation.y += 0.0008;
+                }
+                if (this.renderer && this.scene && this.camera) {
+                    this.renderer.render(this.scene, this.camera);
+                }
+            },
+        };
+
+        // ---------------------------------------------------------------
+        // 5. Map tile probing (runs in background while globe shows)
+        // ---------------------------------------------------------------
+        async function initLeafletMap() {
+            leafletMap = L.map('map', {
+                center: [15, 0], zoom: 2, zoomControl: true,
+                attributionControl: true, worldCopyJump: false, minZoom: 2,
+            });
+            const idx = await findWorkingTile();
+            addTileLayer(idx);
+        }
+
+        // ---------------------------------------------------------------
+        // 6. Live preview: input → globe rotation
+        // ---------------------------------------------------------------
+        let previewTimer = null;
+        let previewAbort = null;
+        let lastPreviewLatLng = null;
+
+        function onInputChange() {
+            const val = searchInput.value.trim();
+            if (!val || val.length < 1) {
+                if (globe.autoRotate === false && !globe.animating) {
+                    // Return to idle rotation
+                    globe.autoRotate = true;
+                    globe.camera.position.set(0, 0, CAMERA_DIST_FAR);
+                }
+                return;
+            }
+
+            clearTimeout(previewTimer);
+            if (previewAbort) { previewAbort.abort(); previewAbort = null; }
+
+            previewTimer = setTimeout(async () => {
+                const ac = new AbortController();
+                previewAbort = ac;
+                const url = \`\${NOMINATIM_URL}/search?q=\${encodeURIComponent(val)}&format=jsonv2&accept-language=zh&limit=1\`;
+                try {
+                    const resp = await fetchWithCORS(url, { headers:{'User-Agent':'AntipodeFinder/1.0'} });
+                    const data = await resp.json();
+                    if (ac.signal.aborted) return;
+                    if (data && data.length > 0) {
+                        const lat = parseFloat(data[0].lat);
+                        const lng = parseFloat(data[0].lon);
+                        if (lastPreviewLatLng && lastPreviewLatLng[0] === lat && lastPreviewLatLng[1] === lng) return;
+                        lastPreviewLatLng = [lat, lng];
+                        globe.flyTo(lat, lng, CAMERA_DIST_CLOSE + 3, 600);
+                    }
+                } catch { /* ignore preview errors */ }
+                previewAbort = null;
+            }, 500);
+        }
+
+        // ---------------------------------------------------------------
+        // 7. Init
+        // ---------------------------------------------------------------
+        async function init() {
+            // Start 3D globe immediately
+            globe.init();
+            globeContainer.classList.remove('faded');
+
+            // Init Leaflet map in background (hidden behind globe)
+            await initLeafletMap();
+            mapEl.classList.add('hidden');
+
+            // Events
+            searchBtn.addEventListener('click', () => searchPlace(searchInput.value));
+            searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') searchPlace(searchInput.value); });
+            searchInput.addEventListener('input', onInputChange);
+            locateBtn.addEventListener('click', useCurrentLocation);
+
+            document.querySelectorAll('[data-place]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    searchInput.value = btn.getAttribute('data-place');
+                    // Trigger globe rotation preview, then search
+                    onInputChange();
+                    setTimeout(() => searchPlace(btn.getAttribute('data-place')), 300);
+                });
+            });
+
+            window.addEventListener('resize', () => {
+                if (leafletMap) leafletMap.invalidateSize();
+            });
+        }
+
+        init();
+    </script>
+</body>
+</html>
+`;
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -21,85 +1865,55 @@ export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const path = url.pathname;
-
-        // OPTIONS preflight
         if (request.method === 'OPTIONS') {
             return new Response(null, { status: 204, headers: corsHeaders });
         }
-
-        // API Proxy routes
         if (path.startsWith('/api/')) {
             return handleAPI(path, url, request);
         }
-
-        // Static files: Pages (env.ASSETS) or Workers ([assets] config)
-        if (typeof env.ASSETS !== 'undefined') {
-            return env.ASSETS.fetch(request);
-        }
-
-        return new Response('Not Found', { status: 404 });
+        return new Response(INDEX_HTML, {
+            headers: { 'Content-Type': 'text/html; charset=utf-8', ...corsHeaders },
+        });
     },
 };
 
 async function handleAPI(path, url, request) {
-    const searchParams = url.searchParams;
-    const queryString = url.search;
-
+    const params = url.searchParams;
+    const qs = url.search;
     if (path === '/api/proxy') {
-        const target = searchParams.get('url');
-        if (!target) return new Response('Missing url param', { status: 400, headers: corsHeaders });
-        return proxyRequest(target, request);
+        const t = params.get('url');
+        if (!t) return new Response('Missing url', { status: 400, headers: corsHeaders });
+        return doProxy(t, request);
     }
-
     if (path.startsWith('/api/nominatim/')) {
-        const targetPath = path.replace('/api/nominatim', '');
-        return proxyRequest('https://nominatim.openstreetmap.org' + targetPath + queryString, request);
+        return doProxy('https://nominatim.openstreetmap.org' + path.replace('/api/nominatim', '') + qs, request);
     }
-
     if (path.startsWith('/api/wikipedia/')) {
-        const targetPath = path.replace('/api/wikipedia', '');
-        const domain = searchParams.get('domain') || 'en.wikipedia.org';
-        return proxyRequest('https://' + domain + targetPath + queryString, request);
+        const domain = params.get('domain') || 'en.wikipedia.org';
+        return doProxy('https://' + domain + path.replace('/api/wikipedia', '') + qs, request);
     }
-
     if (path.startsWith('/api/bing/')) {
-        const targetPath = path.replace('/api/bing', '');
-        const base = searchParams.get('base') || 'cn.bing.com';
-        return proxyRequest('https://' + base + targetPath + queryString, request);
+        const base = params.get('base') || 'cn.bing.com';
+        return doProxy('https://' + base + path.replace('/api/bing', '') + qs, request);
     }
-
     if (path.startsWith('/api/baike/')) {
-        const targetPath = path.replace('/api/baike', '');
-        return proxyRequest('https://baike.baidu.com' + targetPath + queryString, request);
+        return doProxy('https://baike.baidu.com' + path.replace('/api/baike', '') + qs, request);
     }
-
-    return new Response('Unknown API route', { status: 404, headers: corsHeaders });
+    return new Response('Unknown route', { status: 404, headers: corsHeaders });
 }
 
-async function proxyRequest(target, request) {
+async function doProxy(target, request) {
     try {
-        const headers = new Headers(request.headers);
-        headers.delete('cf-connecting-ip');
-        headers.delete('x-forwarded-for');
-        headers.delete('x-real-ip');
-        headers.set('User-Agent', 'AntipodeFinder/1.0 (Cloudflare Worker)');
-
-        const response = await fetch(target, { method: request.method, headers });
-
-        const respHeaders = new Headers(response.headers);
-        for (const [key, value] of Object.entries(corsHeaders)) {
-            respHeaders.set(key, value);
-        }
-
-        return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: respHeaders,
-        });
-    } catch (err) {
-        return new Response('Proxy error: ' + err.message, {
-            status: 502,
-            headers: corsHeaders,
-        });
+        const h = new Headers(request.headers);
+        h.delete('cf-connecting-ip');
+        h.delete('x-forwarded-for');
+        h.delete('x-real-ip');
+        h.set('User-Agent', 'AntipodeFinder/1.0 (Cloudflare Worker)');
+        const resp = await fetch(target, { method: request.method, headers: h });
+        const rh = new Headers(resp.headers);
+        for (const [k, v] of Object.entries(corsHeaders)) rh.set(k, v);
+        return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: rh });
+    } catch (e) {
+        return new Response('Proxy error: ' + e.message, { status: 502, headers: corsHeaders });
     }
 }
