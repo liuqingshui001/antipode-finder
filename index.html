@@ -711,7 +711,8 @@
         /** Detect if running on Cloudflare Workers/Pages */
         const IS_CLOUDFLARE = window.location.hostname.includes('workers.dev')
             || window.location.hostname.includes('pages.dev')
-            || window.location.hostname.includes('cloudflare');
+            || window.location.hostname.includes('cloudflare')
+            || (window.location.protocol !== 'file:' && window.location.hostname !== 'localhost' && !window.location.hostname.match(/^127\./));
 
         async function fetchWithCORS(url, options) {
             // On Cloudflare: use the Worker's built-in proxy instead of corsproxy.io
