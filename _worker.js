@@ -1095,7 +1095,7 @@ const INDEX_HTML = `<!DOCTYPE html>
                     for (const r of results) {
                         const title = r.title.replace(/^File:/, '');
                         if (title.match(/\\.(jpg|jpeg|png)$/i)) {
-                            const imgUrl = \`https://commons.wikimedia.org/wiki/Special:FilePath/\${encodeURIComponent(title)}\`;
+                            const imgUrl = \`https://corsproxy.io/?url=\${encodeURIComponent('https://commons.wikimedia.org/wiki/Special:FilePath/' + title)}\`;
                             if (!allUrls.includes(imgUrl)) allUrls.push(imgUrl);
                             if (allUrls.length >= 8) break;
                         }
