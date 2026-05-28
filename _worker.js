@@ -719,7 +719,6 @@ const INDEX_HTML = `<!DOCTYPE html>
             if (IS_CLOUDFLARE) {
                 const proxyUrl = \`/api/proxy?url=\${encodeURIComponent(url)}\`;
                 const resp = await fetch(proxyUrl, options);
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 return resp;
             }
             // Local/dev mode: fallback chain (direct → corsproxy.io)
@@ -1861,60 +1860,30 @@ const corsHeaders = {
     'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': '*',
 };
-
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const path = url.pathname;
-        if (request.method === 'OPTIONS') {
-            return new Response(null, { status: 204, headers: corsHeaders });
-        }
-        if (path.startsWith('/api/')) {
-            return handleAPI(path, url, request);
-        }
-        return new Response(INDEX_HTML, {
-            headers: { 'Content-Type': 'text/html; charset=utf-8', ...corsHeaders },
-        });
+        if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+        if (path.startsWith('/api/')) return handleAPI(path, url, request);
+        return new Response(INDEX_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8', ...corsHeaders } });
     },
 };
-
 async function handleAPI(path, url, request) {
-    const params = url.searchParams;
-    const qs = url.search;
-    if (path === '/api/proxy') {
-        const t = params.get('url');
-        if (!t) return new Response('Missing url', { status: 400, headers: corsHeaders });
-        return doProxy(t, request);
-    }
-    if (path.startsWith('/api/nominatim/')) {
-        return doProxy('https://nominatim.openstreetmap.org' + path.replace('/api/nominatim', '') + qs, request);
-    }
-    if (path.startsWith('/api/wikipedia/')) {
-        const domain = params.get('domain') || 'en.wikipedia.org';
-        return doProxy('https://' + domain + path.replace('/api/wikipedia', '') + qs, request);
-    }
-    if (path.startsWith('/api/bing/')) {
-        const base = params.get('base') || 'cn.bing.com';
-        return doProxy('https://' + base + path.replace('/api/bing', '') + qs, request);
-    }
-    if (path.startsWith('/api/baike/')) {
-        return doProxy('https://baike.baidu.com' + path.replace('/api/baike', '') + qs, request);
-    }
+    const p = url.searchParams, q = url.search;
+    if (path === '/api/proxy') { const t = p.get('url'); if (!t) return new Response('Missing url', { status: 400, headers: corsHeaders }); return doProxy(t, request); }
+    const routes = [['/api/nominatim/', 'https://nominatim.openstreetmap.org'], ['/api/wikipedia/', 'https://' + (p.get('domain') || 'en.wikipedia.org')], ['/api/bing/', 'https://' + (p.get('base') || 'cn.bing.com')], ['/api/baike/', 'https://baike.baidu.com']];
+    for (const [pfx, base] of routes) if (path.startsWith(pfx)) return doProxy(base + path.slice(pfx.length - 1) + q, request);
     return new Response('Unknown route', { status: 404, headers: corsHeaders });
 }
-
 async function doProxy(target, request) {
     try {
         const h = new Headers(request.headers);
-        h.delete('cf-connecting-ip');
-        h.delete('x-forwarded-for');
-        h.delete('x-real-ip');
+        ['cf-connecting-ip','x-forwarded-for','x-real-ip'].forEach(k => h.delete(k));
         h.set('User-Agent', 'AntipodeFinder/1.0 (Cloudflare Worker)');
-        const resp = await fetch(target, { method: request.method, headers: h });
-        const rh = new Headers(resp.headers);
+        const r = await fetch(target, { method: request.method, headers: h });
+        const rh = new Headers(r.headers);
         for (const [k, v] of Object.entries(corsHeaders)) rh.set(k, v);
-        return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: rh });
-    } catch (e) {
-        return new Response('Proxy error: ' + e.message, { status: 502, headers: corsHeaders });
-    }
+        return new Response(r.body, { status: r.status, statusText: r.statusText, headers: rh });
+    } catch (e) { return new Response('Proxy error: ' + e.message, { status: 502, headers: corsHeaders }); }
 }

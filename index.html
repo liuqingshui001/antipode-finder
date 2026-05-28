@@ -719,7 +719,6 @@
             if (IS_CLOUDFLARE) {
                 const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
                 const resp = await fetch(proxyUrl, options);
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 return resp;
             }
             // Local/dev mode: fallback chain (direct → corsproxy.io)
