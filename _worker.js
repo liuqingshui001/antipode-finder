@@ -1,13 +1,14 @@
 /**
- * Cloudflare Pages Functions — 地球的另一边 API Proxy
+ * Cloudflare Workers / Pages Functions — 地球的另一边 API Proxy
  *
- * 部署方式:
- *   wrangler pages deploy ./
+ * 通用格式，同时支持:
+ *   wrangler pages deploy ./   (Pages 部署)
+ *   wrangler deploy             (Workers + Assets 部署)
  *
  * 功能:
- *   1. 根路径 / → Pages 自动返回 index.html
- *   2. /api/* → 代理到外部 API (Nominatim / Wikipedia / Bing / Baidu)
- *   3. /api/proxy?url=XXX → 通用代理 (替代 corsproxy.io)
+ *   - /api/* → 代理到外部 API (Nominatim / Wikipedia / Bing / Baidu)
+ *   - /api/proxy?url=XXX → 通用代理
+ *   - 其他路径 → 由 Cloudflare assets 系统托管静态文件
  */
 
 const corsHeaders = {
@@ -16,24 +17,29 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': '*',
 };
 
-export async function onRequest(context) {
-    const { request, env } = context;
-    const url = new URL(request.url);
-    const path = url.pathname;
+export default {
+    async fetch(request, env, ctx) {
+        const url = new URL(request.url);
+        const path = url.pathname;
 
-    // Handle OPTIONS (preflight)
-    if (request.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: corsHeaders });
-    }
+        // OPTIONS preflight
+        if (request.method === 'OPTIONS') {
+            return new Response(null, { status: 204, headers: corsHeaders });
+        }
 
-    // API Proxy routes
-    if (path.startsWith('/api/')) {
-        return handleAPI(path, url, request);
-    }
+        // API Proxy routes
+        if (path.startsWith('/api/')) {
+            return handleAPI(path, url, request);
+        }
 
-    // Static files — let Pages handle them
-    return env.ASSETS.fetch(request);
-}
+        // Static files: Pages (env.ASSETS) or Workers ([assets] config)
+        if (typeof env.ASSETS !== 'undefined') {
+            return env.ASSETS.fetch(request);
+        }
+
+        return new Response('Not Found', { status: 404 });
+    },
+};
 
 async function handleAPI(path, url, request) {
     const searchParams = url.searchParams;
@@ -41,9 +47,7 @@ async function handleAPI(path, url, request) {
 
     if (path === '/api/proxy') {
         const target = searchParams.get('url');
-        if (!target) {
-            return new Response('Missing url param', { status: 400, headers: corsHeaders });
-        }
+        if (!target) return new Response('Missing url param', { status: 400, headers: corsHeaders });
         return proxyRequest(target, request);
     }
 

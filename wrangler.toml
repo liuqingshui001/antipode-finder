@@ -1,3 +1,11 @@
 name = "antipode-finder"
 main = "_worker.js"
 compatibility_date = "2024-12-18"
+
+# Workers + Assets: 静态文件由 Cloudflare 托管
+# 用于: wrangler deploy
+[assets]
+directory = "./"
+
+# Pages 部署使用: wrangler pages deploy ./
+# (无需本文件, _worker.js 和静态文件自动生效)
