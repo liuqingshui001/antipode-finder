@@ -74,6 +74,29 @@ const INDEX_HTML = `<!DOCTYPE html>
         .subtitle { font-size: 13px; color: #8899bb; margin-left: 4px; letter-spacing: 0; }
         .subtitle .highlight { color: #4facfe; -webkit-text-fill-color: #4facfe; }
 
+        .lang-toggle {
+            display: flex; align-items: center; gap: 4px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(100,140,255,0.15);
+            border-radius: 20px;
+            padding: 4px 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .lang-toggle:hover { background: rgba(255,255,255,0.12); }
+        .lang-toggle span {
+            padding: 3px 10px;
+            border-radius: 16px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #667799;
+            transition: all 0.2s;
+        }
+        .lang-toggle span.active {
+            background: linear-gradient(135deg, #4facfe, #6366f1);
+            color: #fff;
+        }
+
         /* ===== Search ===== */
         .search-section {
             background: linear-gradient(180deg, rgba(13, 19, 33, 0.8) 0%, rgba(10, 14, 26, 0.4) 100%);
@@ -547,19 +570,23 @@ const INDEX_HTML = `<!DOCTYPE html>
         <div class="logo">
             <div class="logo-icon">🌍</div>
             <div>
-                地球的另一边
+                <span data-i18n="title">地球的另一边</span>
                 <span class="subtitle">· <span class="highlight">Antipode</span> Finder</span>
             </div>
+        </div>
+        <div class="lang-toggle" id="langToggle">
+            <span data-lang="zh" class="active">中</span>
+            <span data-lang="en">En</span>
         </div>
     </header>
 
     <div class="search-section">
         <div class="search-wrapper">
             <span class="search-icon">🔍</span>
-            <input type="text" id="searchInput" placeholder="输入地点名称，如「北京」「东京」「纽约」..." autocomplete="off" />
+            <input type="text" id="searchInput" data-i18n-placeholder="searchPlaceholder" placeholder="输入地点名称，如「北京」「东京」「纽约」..." autocomplete="off" />
         </div>
-        <button class="btn btn-primary" id="searchBtn">搜索</button>
-        <button class="btn btn-locate" id="locateBtn">📍 我的位置</button>
+        <button class="btn btn-primary" id="searchBtn" data-i18n-btn="searchBtn">搜索</button>
+        <button class="btn btn-locate" id="locateBtn" data-i18n-btn="locateBtn">📍 我的位置</button>
     </div>
 
     <div class="main-content">
@@ -569,8 +596,8 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         <div class="empty-state" id="emptyState">
             <span class="emoji">🌏</span>
-            <h2>从脚下钻过去，看看地球另一边</h2>
-            <p>输入一个地点，或者用我的位置，找到它正对面的对跖点</p>
+            <h2 data-i18n="emptyTitle">从脚下钻过去，看看地球另一边</h2>
+            <p data-i18n="emptyDesc">输入一个地点，或者用我的位置，找到它正对面的对跖点</p>
             <div class="examples">
                 <button data-place="北京">北京</button>
                 <button data-place="上海">上海</button>
@@ -579,19 +606,19 @@ const INDEX_HTML = `<!DOCTYPE html>
                 <button data-place="伦敦">伦敦</button>
                 <button data-place="悉尼">悉尼</button>
             </div>
-            <p class="server-hint">💡 如遇网络问题，试试用 <code>node server.js</code> 启动本地服务器</p>
+            <p class="server-hint" data-i18n="serverHint">💡 如遇网络问题，试试用 <code>node server.js</code> 启动本地服务器</p>
         </div>
 
         <div class="loading-state" id="loadingState">
             <div class="spinner"></div>
-            <span>正在查找...</span>
+            <span data-i18n="loading">正在查找...</span>
         </div>
 
         <div class="info-panel" id="infoPanel">
             <div class="info-card original-card">
                 <div class="info-card-header">
-                    <span class="badge badge-original">📍 起点</span>
-                    <span class="info-card-title">你的位置</span>
+                    <span class="badge badge-original" data-i18n="originBadge">📍 起点</span>
+                    <span class="info-card-title" data-i18n="originLabel">你的位置</span>
                 </div>
                 <div class="info-card-name" id="origName">—</div>
                 <div class="info-card-address" id="origAddress"></div>
@@ -606,8 +633,8 @@ const INDEX_HTML = `<!DOCTYPE html>
             </div>
             <div class="info-card antipode-card">
                 <div class="info-card-header">
-                    <span class="badge badge-antipode">🌏 对跖点</span>
-                    <span class="info-card-title">地球另一边</span>
+                    <span class="badge badge-antipode" data-i18n="antipodeBadge">🌏 对跖点</span>
+                    <span class="info-card-title" data-i18n="antipodeLabel">地球另一边</span>
                 </div>
                 <div class="info-card-name" id="antiName">—</div>
                 <div class="info-card-address" id="antiAddress"></div>
@@ -618,13 +645,13 @@ const INDEX_HTML = `<!DOCTYPE html>
         <!-- Info Sidebar -->
         <div id="info-sidebar">
             <div class="sidebar-header">
-                <h3>🌏 对跖点 · 详情</h3>
+                <h3 data-i18n="sidebarTitle">🌏 对跖点 · 详情</h3>
                 <button class="close-btn" id="sidebarClose">✕</button>
             </div>
             <div class="sidebar-tabs">
-                <button class="tab-btn active" data-tab="baike">📖 百科</button>
-                <button class="tab-btn" data-tab="photo">🖼️ 图片</button>
-                <button class="tab-btn" data-tab="news">📰 新闻</button>
+                <button class="tab-btn active" data-tab="baike" data-i18n-btn="tabBaike">📖 百科</button>
+                <button class="tab-btn" data-tab="photo" data-i18n-btn="tabPhoto">🖼️ 图片</button>
+                <button class="tab-btn" data-tab="news" data-i18n-btn="tabNews">📰 新闻</button>
             </div>
             <div class="sidebar-body" id="sidebarBody">
                 <!-- Baike tab -->
@@ -652,7 +679,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         </div>
     </div>
 
-    <footer>
+    <footer data-i18n="footer">
         使用 <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 地图数据 ·
         地理编码服务由 <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a> 提供
     </footer>
@@ -662,6 +689,87 @@ const INDEX_HTML = `<!DOCTYPE html>
     <!-- ===== App Module (Three.js + Leaflet integration) ===== -->
     <script type="module">
         import * as THREE from 'three';
+
+        // ---------------------------------------------------------------
+        // 0. i18n 中英双语 / bilingual
+        // ---------------------------------------------------------------
+        const T = {
+            title: ['地球的另一边', 'The Other Side of the Earth'],
+            searchPlaceholder: ['输入地点名称，如「北京」「东京」「纽约」...', 'Enter a location, e.g. "New York", "Tokyo", "Beijing"...'],
+            searchBtn: ['搜索', 'Search'],
+            locateBtn: ['📍 我的位置', '📍 My Location'],
+            emptyTitle: ['从脚下钻过去，看看地球另一边', 'What is on the other side of the Earth?'],
+            emptyDesc: ['输入一个地点，或者用我的位置，找到它正对面的对跖点', 'Enter a location or use your own to find its antipode.'],
+            serverHint: ['💡 如遇网络问题，试试用 <code>node server.js</code> 启动本地服务器', '💡 If you have network issues, try <code>node server.js</code>'],
+            loading: ['正在查找...', 'Searching...'],
+            loadingTiles: ['正在探测可用的地图服务器...', 'Checking map tile servers...'],
+            originBadge: ['📍 起点', '📍 Origin'],
+            originLabel: ['你的位置', 'Your Location'],
+            antipodeBadge: ['🌏 对跖点', '🌏 Antipode'],
+            antipodeLabel: ['地球另一边', 'Other Side'],
+            distance: ['≈ 12,742 km', '≈ 12,742 km'],
+            unknownLocation: ['未知位置', 'Unknown'],
+            unknownAddress: ['未知区域', 'Unknown area'],
+            ocean: ['茫茫大海', 'Open Ocean'],
+            oceanDesc: ['该点位于海洋中', 'This point is in the ocean'],
+            sidebarTitle: ['🌏 对跖点 · 详情', '🌏 Antipode Details'],
+            tabBaike: ['📖 百科', '📖 Info'],
+            tabPhoto: ['🖼️ 图片', '🖼️ Photos'],
+            tabNews: ['📰 新闻', '📰 News'],
+            sourceLabel: ['来源', 'Source'],
+            noBaike: ['暂无百科信息', 'No encyclopedia info'],
+            noPhoto: ['暂无图片', 'No photos'],
+            noNews: ['暂无相关文章', 'No related articles'],
+            geolocatePrompt: ['请允许定位', 'Please allow location access'],
+            geolocateFail: ['无法获取位置', 'Unable to get location'],
+            geolocateTimeout: ['定位超时', 'Location timeout'],
+            geolocateNotSupported: ['您的浏览器不支持地理定位功能', 'Geolocation not supported by your browser'],
+            networkError: ['网络请求失败，请尝试用本地服务器打开（详见控制台指引）', 'Network error. Try opening with a local server.'],
+            searchError: ['查询失败，请检查网络后重试', 'Search failed. Please check your network.'],
+            noLocation: ['请输入地点名称', 'Please enter a location name'],
+            notFound: ['未找到地点', 'Location not found'],
+            footer: ['使用 OpenStreetMap 地图数据 · 地理编码服务由 Nominatim 提供', 'Map data via OpenStreetMap · Geocoding by Nominatim'],
+            oceanWarning: ['茫茫大海 🌊', 'Open Ocean 🌊'],
+            wikiSource: ['维基百科', 'Wikipedia'],
+            baiduSource: ['百度百科', 'Baidu Baike'],
+            bingSource: ['必应', 'Bing'],
+            bingNewsSource: ['Wikipedia', 'Wikipedia'],
+        };
+
+        let lang = localStorage.getItem('lang') || (navigator.language.startsWith('zh') ? 'zh' : 'en');
+        if (lang !== 'zh' && lang !== 'en') lang = navigator.language.startsWith('zh') ? 'zh' : 'en';
+        const langIdx = () => lang === 'zh' ? 0 : 1;
+
+        function t(key) { return T[key] ? T[key][langIdx()] : key; }
+        function setLang(l) { lang = l; localStorage.setItem('lang', l); updateI18n(); }
+
+        function updateI18n() {
+            // Text content
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (T[key]) el.textContent = T[key][langIdx()];
+            });
+            // Placeholders
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                const key = el.getAttribute('data-i18n-placeholder');
+                if (T[key]) el.setAttribute('placeholder', T[key][langIdx()]);
+            });
+            // Buttons
+            document.querySelectorAll('[data-i18n-btn]').forEach(el => {
+                const key = el.getAttribute('data-i18n-btn');
+                if (T[key]) el.textContent = T[key][langIdx()];
+            });
+            // Lang toggle active state
+            document.querySelectorAll('#langToggle span').forEach(s => {
+                s.classList.toggle('active', s.dataset.lang === lang);
+            });
+        }
+
+        document.getElementById('langToggle').addEventListener('click', (e) => {
+            const span = e.target.closest('span');
+            if (!span) return;
+            setLang(span.dataset.lang);
+        });
 
         // ---------------------------------------------------------------
         // 1. DOM refs & state
@@ -873,8 +981,8 @@ const INDEX_HTML = `<!DOCTYPE html>
                         // Trigger sidebar content loading, passing raw address object
                         loadSidebarContent(shortName, lat, lng, d);
                     } else {
-                        antiName.textContent = '茫茫大海 🌊';
-                        antiAddress.textContent = formatCoords(lat, lng) + ' — 该点位于海洋中';
+                        antiName.textContent = t('oceanWarning');
+                        antiAddress.textContent = formatCoords(lat, lng) + ' — ' + t('oceanDesc');
                     }
                 })
                 .catch(() => { antiName.textContent = '未知区域'; antiAddress.textContent = formatCoords(lat,lng); });
@@ -890,7 +998,7 @@ const INDEX_HTML = `<!DOCTYPE html>
         const tabPhoto = document.getElementById('tabPhoto');
         const tabNews = document.getElementById('tabNews');
 
-        const isChineseUser = navigator.language.startsWith('zh');
+        const isChineseUser = lang === 'zh';
 
         // Tab switching
         document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -1112,7 +1220,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         /** Main: load all sidebar content for the antipode */
         async function loadSidebarContent(antiName, antiLat, antiLng, rawAddress) {
-            if (!antiName || antiName === '—' || antiName === '正在查找...') return;
+            if (!antiName || antiName === '—' || antiName === t('loading')) return;
 
             // Show skeletons
             tabBaike.innerHTML = '<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div>';
@@ -1174,17 +1282,17 @@ const INDEX_HTML = `<!DOCTYPE html>
                         if (baike.imageUrl) {
                             tabPhoto.innerHTML = \`<div class="photo-grid"><img src="\${baike.imageUrl}" alt="\${escapeHtml(baike.title)}" onerror="this.style.display='none'"></div>\`;
                         } else {
-                            tabPhoto.innerHTML = '<div class="empty-tab"><span class="emoji">🖼️</span>暂无图片</div>';
+                            tabPhoto.innerHTML = \`<div class="empty-tab"><span class="emoji">🖼️</span>\${t('noPhoto')}</div>\`;
                         }
                     }
                 });
             } else {
-                tabBaike.innerHTML = \`<div class="empty-tab"><span class="emoji">📖</span>暂无百科信息</div>\`;
+                tabBaike.innerHTML = \`<div class="empty-tab"><span class="emoji">📖</span>\${t('noBaike')}</div>\`;
                 // Still try image search even without baike
                 fetchLocationImages(bestName, isChineseUser).then(urls => {
                     tabPhoto.innerHTML = urls.length > 0
                         ? \`<div class="photo-grid">\${urls.map(u => \`<img src="\${u}" alt="" onerror="this.style.display='none'">\`).join('')}</div>\`
-                        : '<div class="empty-tab"><span class="emoji">🖼️</span>暂无图片</div>';
+                        : \`<div class="empty-tab"><span class="emoji">🖼️</span>\${t('noPhoto')}</div>\`;
                 });
             }
 
@@ -1206,7 +1314,7 @@ const INDEX_HTML = `<!DOCTYPE html>
                     </div>
                 \`).join('');
             } else {
-                tabNews.innerHTML = '<div class="empty-tab"><span class="emoji">📰</span>暂无相关新闻</div>';
+                tabNews.innerHTML = \`<div class="empty-tab"><span class="emoji">📰</span>\${t('noNews')}</div>\`;
             }
         }
 
@@ -1218,7 +1326,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         function searchPlace(query) {
             if (isSearching) return;
-            if (!query || !query.trim()) { showError('请输入地点名称'); return; }
+            if (!query || !query.trim()) { showError(t('noLocation')); return; }
             const q = query.trim();
             isSearching = true;
             emptyState.style.display = 'none';
@@ -1230,7 +1338,7 @@ const INDEX_HTML = `<!DOCTYPE html>
                 .then(data => {
                     loadingState.classList.remove('active');
                     if (!data || data.length === 0) {
-                        emptyState.style.display = ''; showError(\`未找到地点「\${q}」\`); isSearching = false; return;
+                        emptyState.style.display = ''; showError(\`\${t('notFound')}「\${q}」\`); isSearching = false; return;
                     }
                     const result = data[0];
                     const lat = parseFloat(result.lat);
@@ -1249,13 +1357,13 @@ const INDEX_HTML = `<!DOCTYPE html>
                 })
                 .catch(err => {
                     loadingState.classList.remove('active'); emptyState.style.display = '';
-                    showError(err.message.includes('Network error') ? '网络请求失败，请尝试用本地服务器打开' : '查询失败，请检查网络后重试');
+                    showError(err.message.includes('Network error') ? t('networkError') : t('searchError'));
                     console.error('Geocode error:', err); isSearching = false;
                 });
         }
 
         function useCurrentLocation() {
-            if (!navigator.geolocation) { showError('您的浏览器不支持地理定位'); return; }
+            if (!navigator.geolocation) { showError(t('geolocateNotSupported')); return; }
             locateBtn.disabled = true; locateBtn.textContent = '⏳ 获取中...';
             emptyState.style.display = 'none'; loadingState.classList.add('active');
             navigator.geolocation.getCurrentPosition(
@@ -1292,8 +1400,8 @@ const INDEX_HTML = `<!DOCTYPE html>
                 (err) => {
                     loadingState.classList.remove('active'); emptyState.style.display = '';
                     locateBtn.disabled = false; locateBtn.textContent = '📍 我的位置';
-                    const msgs = {1:'请允许定位',2:'无法获取位置',3:'定位超时'};
-                    showError(msgs[err.code] || '定位失败');
+                        const msgs = {1:'geolocatePrompt',2:'geolocateFail',3:'geolocateTimeout'};
+                        showError(t(msgs[err.code]) || '定位失败');
                 },
                 { enableHighAccuracy:false, timeout:10000, maximumAge:60000 }
             );
