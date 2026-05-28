@@ -813,6 +813,8 @@ const INDEX_HTML = `<!DOCTYPE html>
             'https://corsproxy.io/?url=',
             'https://api.allorigins.win/raw?url=',
             'https://cors-anywhere.herokuapp.com/',
+            'https://proxy.cors.sh/',
+            'https://api.codetabs.com/v1/proxy?quest=',
         ];
         let corsProxyIndex = -1;
 
@@ -844,6 +846,12 @@ const INDEX_HTML = `<!DOCTYPE html>
                 const proxyUrl = proxy + encodeURIComponent(url);
                 try {
                     const resp = await fetch(proxyUrl, options);
+                    // If proxy returned 403/429, the upstream blocked it — try next proxy
+                    if (resp.status === 403 || resp.status === 429) {
+                        console.warn(\`CORS proxy blocked by upstream (\${resp.status}): \${proxy}\`);
+                        corsProxyIndex++;
+                        continue;
+                    }
                     console.log(\`CORS proxy succeeded: \${proxy}\`);
                     return resp;
                 } catch (proxyErr) {

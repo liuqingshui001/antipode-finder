@@ -4,6 +4,7 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+release/
 build.py
 build_final.py
 _worker_template.js
