@@ -1095,7 +1095,7 @@ const INDEX_HTML = `<!DOCTYPE html>
                     for (const r of results) {
                         const title = r.title.replace(/^File:/, '');
                         if (title.match(/\\.(jpg|jpeg|png)$/i)) {
-                            const imgUrl = \`https://corsproxy.io/?url=\${encodeURIComponent('https://commons.wikimedia.org/wiki/Special:FilePath/' + title)}\`;
+                            const imgUrl = \`https://commons.wikimedia.org/wiki/Special:FilePath/\${encodeURIComponent(title)}\`;
                             if (!allUrls.includes(imgUrl)) allUrls.push(imgUrl);
                             if (allUrls.length >= 8) break;
                         }
@@ -1106,24 +1106,23 @@ const INDEX_HTML = `<!DOCTYPE html>
             return allUrls.slice(0, 6);
         }
 
-        /** Fetch images for a location — Wikipedia article images + Commons supplement */
+        /** Fetch images for a location — all routed through CORS proxy to avoid block */
         async function fetchLocationImages(name, useCN) {
-            // 1. Try Wikipedia article images
             let urls = await fetchWikipediaImages(name, useCN);
-            // 2. If fewer than 4, supplement with Wikimedia Commons search
             if (urls.length < 4) {
                 const commons = await fetchCommonsImages(name);
-                for (const u of commons) {
-                    if (!urls.includes(u)) urls.push(u);
-                    if (urls.length >= 6) break;
-                }
+                for (const u of commons) { if (!urls.includes(u)) urls.push(u); if (urls.length >= 6) break; }
             }
-            // 3. Final fallback: Bing image search
             if (urls.length === 0) {
                 const bing = await fetchBingImage(name, useCN);
                 urls = bing;
             }
-            return urls.slice(0, 6);
+            // Route all external images through corsproxy.io (access from China)
+            return urls.slice(0, 6).map(u => {
+                if (u.startsWith('https://upload.wikimedia.org') || u.startsWith('https://commons.wikimedia.org'))
+                    return 'https://corsproxy.io/?url=' + encodeURIComponent(u);
+                return u;
+            });
         }
 
         /** Try multiple name candidates — Wikipedia first, then Bing knowledge card fallback */
@@ -1994,37 +1993,19 @@ const INDEX_HTML = `<!DOCTYPE html>
 </html>
 `;
 
-const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-    'Access-Control-Allow-Headers': '*',
-};
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
-export default {
-    async fetch(request, env, ctx) {
-        const url = new URL(request.url);
-        const path = url.pathname;
-        if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
-        if (path.startsWith('/api/')) return handleAPI(path, url, request);
-        return new Response(INDEX_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8', ...corsHeaders } });
-    },
-};
-async function handleAPI(path, url, request) {
-    const p = url.searchParams, q = url.search;
-    if (path === '/api/proxy') { const t = p.get('url'); if (!t) return new Response('Missing url', { status: 400, headers: corsHeaders }); return doProxy(t, request); }
-    const routes = [['/api/nominatim/', 'https://nominatim.openstreetmap.org'], ['/api/wikipedia/', 'https://' + (p.get('domain') || 'en.wikipedia.org')], ['/api/bing/', 'https://' + (p.get('base') || 'cn.bing.com')], ['/api/baike/', 'https://baike.baidu.com']];
-    for (const [pfx, base] of routes) if (path.startsWith(pfx)) return doProxy(base + path.slice(pfx.length - 1) + q, request);
-    return new Response('Unknown route', { status: 404, headers: corsHeaders });
-}
-async function doProxy(target, request) {
-    try {
-        const h = new Headers();
-        h.set('User-Agent', UA);
-        h.set('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
-        h.set('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8');
-        const r = await fetch(target, { method: 'GET', headers: h, redirect: 'follow' });
-        const rh = new Headers(r.headers);
-        for (const [k, v] of Object.entries(corsHeaders)) rh.set(k, v);
-        return new Response(r.body, { status: r.status, statusText: r.statusText, headers: rh });
-    } catch (e) { return new Response('Proxy error: ' + e.message, { status: 502, headers: corsHeaders }); }
-}
+const corsHeaders = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET,HEAD,OPTIONS','Access-Control-Allow-Headers':'*'};
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36';
+export default {async fetch(req,env,ctx){const u=new URL(req.url);const p=u.pathname;
+if(req.method==='OPTIONS')return new Response(null,{status:204,headers:corsHeaders});
+if(p.startsWith('/api/'))return api(p,u,req);
+return new Response(INDEX_HTML,{headers:{'Content-Type':'text/html; charset=utf-8',...corsHeaders}});}};
+async function api(p,u,req){const s=u.searchParams,q=u.search;
+if(p==='/api/proxy'){const t=s.get('url');return t?px(t,req):new Response('Missing url',{status:400,headers:corsHeaders});}
+const r=[['/api/nominatim/','https://nominatim.openstreetmap.org'],['/api/wikipedia/','https://'+(s.get('domain')||'en.wikipedia.org')],['/api/bing/','https://'+(s.get('base')||'cn.bing.com')],['/api/baike/','https://baike.baidu.com']];
+for(const[pf,b]of r)if(p.startsWith(pf))return px(b+p.slice(pf.length-1)+q,req);
+return new Response('Unknown route',{status:404,headers:corsHeaders});}
+async function px(t,r){try{const h=new Headers();h.set('User-Agent',UA);h.set('Accept','text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');h.set('Accept-Language','zh-CN,zh;q=0.9,en;q=0.8');
+const resp=await fetch(t,{method:'GET',headers:h,redirect:'follow'});
+const rh=new Headers(resp.headers);for(const[k,v]of Object.entries(corsHeaders))rh.set(k,v);
+return new Response(resp.body,{status:resp.status,statusText:resp.statusText,headers:rh});
+}catch(e){return new Response('Proxy error: '+e.message,{status:502,headers:corsHeaders});}}

@@ -1095,7 +1095,7 @@
                     for (const r of results) {
                         const title = r.title.replace(/^File:/, '');
                         if (title.match(/\.(jpg|jpeg|png)$/i)) {
-                            const imgUrl = `https://corsproxy.io/?url=${encodeURIComponent('https://commons.wikimedia.org/wiki/Special:FilePath/' + title)}`;
+                            const imgUrl = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(title)}`;
                             if (!allUrls.includes(imgUrl)) allUrls.push(imgUrl);
                             if (allUrls.length >= 8) break;
                         }
@@ -1106,24 +1106,23 @@
             return allUrls.slice(0, 6);
         }
 
-        /** Fetch images for a location — Wikipedia article images + Commons supplement */
+        /** Fetch images for a location — all routed through CORS proxy to avoid block */
         async function fetchLocationImages(name, useCN) {
-            // 1. Try Wikipedia article images
             let urls = await fetchWikipediaImages(name, useCN);
-            // 2. If fewer than 4, supplement with Wikimedia Commons search
             if (urls.length < 4) {
                 const commons = await fetchCommonsImages(name);
-                for (const u of commons) {
-                    if (!urls.includes(u)) urls.push(u);
-                    if (urls.length >= 6) break;
-                }
+                for (const u of commons) { if (!urls.includes(u)) urls.push(u); if (urls.length >= 6) break; }
             }
-            // 3. Final fallback: Bing image search
             if (urls.length === 0) {
                 const bing = await fetchBingImage(name, useCN);
                 urls = bing;
             }
-            return urls.slice(0, 6);
+            // Route all external images through corsproxy.io (access from China)
+            return urls.slice(0, 6).map(u => {
+                if (u.startsWith('https://upload.wikimedia.org') || u.startsWith('https://commons.wikimedia.org'))
+                    return 'https://corsproxy.io/?url=' + encodeURIComponent(u);
+                return u;
+            });
         }
 
         /** Try multiple name candidates — Wikipedia first, then Bing knowledge card fallback */
